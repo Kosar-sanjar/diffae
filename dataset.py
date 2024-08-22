@@ -108,13 +108,16 @@ class BaseLMDB(Dataset):
 
     def __getitem__(self, index):
         with self.env.begin(write=False) as txn:
-            key = f'{self.original_resolution}-{str(index).zfill(self.zfill)}'.encode(
-                'utf-8')
+            # key = f'{self.original_resolution}-{str(index).zfill(self.zfill)}'.encode(
+            #     'utf-8')
+            key = f'data-{str(index).zfill(self.zfill)}'.encode('utf-8')
+            
             img_bytes = txn.get(key)
+        return img_bytes
 
-        buffer = BytesIO(img_bytes)
-        img = Image.open(buffer)
-        return img
+        # buffer = BytesIO(img_bytes)
+        # img = Image.open(buffer)
+        # return img
 
 
 def make_transform(

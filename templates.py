@@ -6,7 +6,8 @@ def ddpm():
     base configuration for all DDIM-based models.
     """
     conf = TrainConfig()
-    conf.batch_size = 32
+    # conf.batch_size = 32
+    conf.batch_size = 1
     conf.beatgans_gen_type = GenerativeType.ddim
     conf.beta_scheduler = 'linear'
     conf.data_name = 'ffhq'
@@ -21,7 +22,8 @@ def ddpm():
     conf.net_beatgans_embed_channels = 512
     conf.net_ch_mult = (1, 2, 4, 8)
     conf.net_ch = 64
-    conf.sample_size = 32
+    ##conf.sample_size = 32
+    conf.sample_size = 1
     conf.T_eval = 20
     conf.T = 1000
     conf.make_model_conf()
@@ -33,7 +35,8 @@ def autoenc_base():
     base configuration for all Diff-AE models.
     """
     conf = TrainConfig()
-    conf.batch_size = 32
+    # conf.batch_size = 32
+    conf.batch_size = 1
     conf.beatgans_gen_type = GenerativeType.ddim
     conf.beta_scheduler = 'linear'
     conf.data_name = 'ffhq'
@@ -51,7 +54,8 @@ def autoenc_base():
     conf.net_ch = 64
     conf.net_enc_channel_mult = (1, 2, 4, 8, 8)
     conf.net_enc_pool = 'adaptivenonzero'
-    conf.sample_size = 32
+    #conf.sample_size = 32
+    conf.sample_size = 1
     conf.T_eval = 20
     conf.T = 1000
     conf.make_model_conf()
@@ -63,7 +67,8 @@ def ffhq64_ddpm():
     conf.data_name = 'ffhqlmdb256'
     conf.warmup = 0
     conf.total_samples = 72_000_000
-    conf.scale_up_gpus(4)
+    ##conf.scale_up_gpus(4)
+    conf.scale_up_gpus(1)
     return conf
 
 
@@ -76,7 +81,8 @@ def ffhq64_autoenc():
     conf.net_enc_channel_mult = (1, 2, 4, 8, 8)
     conf.eval_every_samples = 1_000_000
     conf.eval_ema_every_samples = 1_000_000
-    conf.scale_up_gpus(4)
+    #conf.scale_up_gpus(4)
+    conf.scale_up_gpus(1)
     conf.make_model_conf()
     return conf
 
@@ -84,8 +90,10 @@ def ffhq64_autoenc():
 def celeba64d2c_ddpm():
     conf = ffhq128_ddpm()
     conf.data_name = 'celebalmdb'
-    conf.eval_every_samples = 10_000_000
-    conf.eval_ema_every_samples = 10_000_000
+    #conf.eval_every_samples = 10_000_000
+    conf.eval_every_samples = 100
+    #conf.eval_ema_every_samples = 10_000_000
+    conf.eval_ema_every_samples = 100
     conf.total_samples = 72_000_000
     conf.name = 'celeba64d2c_ddpm'
     return conf
@@ -94,8 +102,10 @@ def celeba64d2c_ddpm():
 def celeba64d2c_autoenc():
     conf = ffhq64_autoenc()
     conf.data_name = 'celebalmdb'
-    conf.eval_every_samples = 10_000_000
-    conf.eval_ema_every_samples = 10_000_000
+    #conf.eval_every_samples = 10_000_000
+    conf.eval_every_samples = 100
+    #conf.eval_ema_every_samples = 10_000_000
+    conf.eval_ema_every_samples = 100
     conf.total_samples = 72_000_000
     conf.name = 'celeba64d2c_autoenc'
     return conf
@@ -115,9 +125,12 @@ def ffhq128_ddpm():
     conf.net_ch_mult = (1, 1, 2, 3, 4)
     conf.eval_every_samples = 1_000_000
     conf.eval_ema_every_samples = 1_000_000
-    conf.scale_up_gpus(4)
-    conf.eval_ema_every_samples = 10_000_000
-    conf.eval_every_samples = 10_000_000
+    ##conf.scale_up_gpus(4)
+    conf.scale_up_gpus(1)
+    #conf.eval_ema_every_samples = 10_000_000
+    conf.eval_ema_every_samples = 100
+    #conf.eval_every_samples = 10_000_000
+    conf.eval_every_samples = 100
     conf.make_model_conf()
     return conf
 
@@ -125,15 +138,18 @@ def ffhq128_ddpm():
 def ffhq128_autoenc_base():
     conf = autoenc_base()
     conf.data_name = 'ffhqlmdb256'
-    conf.scale_up_gpus(4)
+    ##conf.scale_up_gpus(4)
+    conf.scale_up_gpus(1)
     conf.img_size = 128
     conf.net_ch = 128
     # final resolution = 8x8
     conf.net_ch_mult = (1, 1, 2, 3, 4)
     # final resolution = 4x4
     conf.net_enc_channel_mult = (1, 1, 2, 3, 4, 4)
-    conf.eval_ema_every_samples = 10_000_000
-    conf.eval_every_samples = 10_000_000
+    #conf.eval_ema_every_samples = 10_000_000
+    conf.eval_ema_every_samples = 100
+    #conf.eval_every_samples = 10_000_000
+    conf.eval_every_samples = 100
     conf.make_model_conf()
     return conf
 
@@ -144,8 +160,10 @@ def ffhq256_autoenc():
     conf.net_ch = 128
     conf.net_ch_mult = (1, 1, 2, 2, 4, 4)
     conf.net_enc_channel_mult = (1, 1, 2, 2, 4, 4, 4)
-    conf.eval_every_samples = 10_000_000
-    conf.eval_ema_every_samples = 10_000_000
+    #conf.eval_every_samples = 10_000_000
+    conf.eval_every_samples = 100
+    #conf.eval_ema_every_samples = 10_000_000
+    conf.eval_ema_every_samples = 100
     conf.total_samples = 200_000_000
     conf.batch_size = 64
     conf.make_model_conf()
@@ -159,8 +177,10 @@ def ffhq256_autoenc_eco():
     conf.net_ch = 128
     conf.net_ch_mult = (1, 1, 2, 2, 4, 4)
     conf.net_enc_channel_mult = (1, 1, 2, 2, 4, 4, 4)
-    conf.eval_every_samples = 10_000_000
-    conf.eval_ema_every_samples = 10_000_000
+    #conf.eval_every_samples = 10_000_000
+    conf.eval_every_samples = 100
+    #conf.eval_ema_every_samples = 10_000_000
+    conf.eval_ema_every_samples = 100
     conf.total_samples = 200_000_000
     conf.batch_size = 64
     conf.make_model_conf()
@@ -184,18 +204,24 @@ def ffhq128_autoenc_72M():
 
 def ffhq128_ddpm_130M():
     conf = ffhq128_ddpm()
-    conf.total_samples = 130_000_000
-    conf.eval_ema_every_samples = 10_000_000
-    conf.eval_every_samples = 10_000_000
+    ##conf.total_samples = 130_000_000
+    conf.total_samples = 100
+    ##conf.eval_ema_every_samples = 10_000_000
+    conf.eval_ema_every_samples = 100
+    ##conf.eval_every_samples = 10_000_000
+    conf.eval_every_samples = 100
     conf.name = 'ffhq128_ddpm_130M'
     return conf
 
 
 def ffhq128_autoenc_130M():
     conf = ffhq128_autoenc_base()
-    conf.total_samples = 130_000_000
-    conf.eval_ema_every_samples = 10_000_000
-    conf.eval_every_samples = 10_000_000
+    #conf.total_samples = 130_000_000
+    conf.total_samples = 100
+    #conf.eval_ema_every_samples = 10_000_000
+    conf.eval_ema_every_samples = 100
+    #conf.eval_every_samples = 10_000_000
+    conf.eval_every_samples = 100
     conf.name = 'ffhq128_autoenc_130M'
     return conf
 
@@ -203,9 +229,12 @@ def ffhq128_autoenc_130M():
 def horse128_ddpm():
     conf = ffhq128_ddpm()
     conf.data_name = 'horse256'
-    conf.total_samples = 130_000_000
-    conf.eval_ema_every_samples = 10_000_000
-    conf.eval_every_samples = 10_000_000
+    #conf.total_samples = 130_000_000
+    conf.total_samples = 100
+    #conf.eval_ema_every_samples = 10_000_000
+    conf.eval_ema_every_samples = 100
+    #conf.eval_every_samples = 10_000_000
+    conf.eval_every_samples = 100
     conf.name = 'horse128_ddpm'
     return conf
 
@@ -213,9 +242,12 @@ def horse128_ddpm():
 def horse128_autoenc():
     conf = ffhq128_autoenc_base()
     conf.data_name = 'horse256'
-    conf.total_samples = 130_000_000
-    conf.eval_ema_every_samples = 10_000_000
-    conf.eval_every_samples = 10_000_000
+    #conf.total_samples = 130_000_000
+    conf.total_samples = 100
+    #conf.eval_ema_every_samples = 10_000_000
+    conf.eval_ema_every_samples = 100
+    #conf.eval_every_samples = 10_000_000
+    conf.eval_every_samples = 100
     conf.name = 'horse128_autoenc'
     return conf
 
@@ -223,8 +255,10 @@ def horse128_autoenc():
 def bedroom128_ddpm():
     conf = ffhq128_ddpm()
     conf.data_name = 'bedroom256'
-    conf.eval_ema_every_samples = 10_000_000
-    conf.eval_every_samples = 10_000_000
+    #conf.eval_ema_every_samples = 10_000_000
+    conf.eval_ema_every_samples = 100
+    #conf.eval_every_samples = 10_000_000
+    conf.eval_every_samples = 100
     conf.total_samples = 120_000_000
     conf.name = 'bedroom128_ddpm'
     return conf
@@ -233,8 +267,10 @@ def bedroom128_ddpm():
 def bedroom128_autoenc():
     conf = ffhq128_autoenc_base()
     conf.data_name = 'bedroom256'
-    conf.eval_ema_every_samples = 10_000_000
-    conf.eval_every_samples = 10_000_000
+    #conf.eval_ema_every_samples = 10_000_000
+    conf.eval_ema_every_samples = 100
+    #conf.eval_every_samples = 10_000_000
+    conf.eval_every_samples = 100
     conf.total_samples = 120_000_000
     conf.name = 'bedroom128_autoenc'
     return conf
