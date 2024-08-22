@@ -188,8 +188,8 @@ class FFHQlmdb(Dataset):
         assert index < self.length
         index = index + self.offset
         img = self.data[index]
-        if self.transform is not None:
-            img = self.transform(img)
+        # if self.transform is not None:
+        #     img = self.transform(img)
         return {'img': img, 'index': index}
 
 
