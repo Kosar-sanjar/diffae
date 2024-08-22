@@ -13,3 +13,4 @@ datasets/celeba
 checkpoints
 
 .ipynb_checkpoints/
+venv/
