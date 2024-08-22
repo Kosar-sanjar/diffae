@@ -10,7 +10,10 @@ datasets/ffhq
 datasets/ffhq256.lmdb
 datasets/celeba.lmdb
 datasets/celeba
+datasets/eeg_5_95_std.pth
+datasets/orignal_ffhq256.lmdb
 checkpoints
 
 .ipynb_checkpoints/
 venv/
+old_venv/

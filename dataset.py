@@ -12,6 +12,25 @@ import pandas as pd
 
 import torchvision.transforms.functional as Ftrans
 
+import sys
+import os
+import random
+import math
+import time
+import torch; torch.utils.backcompat.broadcast_warning.enabled = True
+from torch.utils.data import DataLoader
+from torchvision import transforms, datasets
+import torch.nn as nn
+import torch.nn.functional as F
+import torch.optim
+import torch.backends.cudnn as cudnn; cudnn.benchmark = True
+from scipy.fftpack import fft, rfft, fftfreq, irfft, ifft, rfftfreq
+from scipy import signal
+import numpy as np
+#import models
+import importlib
+
+
 
 class ImageDataset(Dataset):
     def __init__(
@@ -142,6 +161,43 @@ def make_transform(
     transform = transforms.Compose(transform)
     return transform
 
+# Dataset class
+class EEGDataset:
+
+    # Constructor
+    def __init__(self, eeg_signals_path):
+        # Load EEG signals
+        loaded = torch.load(eeg_signals_path)
+        subject=0
+        if subject!=0:
+            self.data = [loaded['dataset'][i] for i in range(len(loaded['dataset']) ) if loaded['dataset'][i]['subject']==opt.subject]
+        else:
+            self.data=loaded['dataset']
+        self.labels = loaded["labels"]
+        self.images = loaded["images"]
+
+        # Compute size
+        self.size = len(self.data)
+
+    # Get size
+    def __len__(self):
+        return self.size
+
+    # Get item
+    def __getitem__(self, i):
+        # Process EEG
+        eeg = self.data[i]["eeg"].float().t()
+        eeg = eeg[opt.time_low:opt.time_high,:]
+
+        if opt.model_type == "model10":
+            eeg = eeg.t()
+            eeg = eeg.view(1,128,opt.time_high-opt.time_low)
+        # Get label
+        label = self.data[i]["label"]
+        # Return
+        return eeg, label
+    
+
 
 class FFHQlmdb(Dataset):
     def __init__(self,
@@ -153,8 +209,15 @@ class FFHQlmdb(Dataset):
                  do_augment: bool = True,
                  do_normalize: bool = True,
                  **kwargs):
-        self.original_resolution = original_resolution
-        self.data = BaseLMDB(path, original_resolution, zfill=5)
+        # self.original_resolution = original_resolution
+        # self.data = BaseLMDB(path, original_resolution, zfill=5)
+
+        
+        dataset = EEGDataset("datasets/eeg_5_95_std.pth").data
+
+        dataset = [np.array(data["eeg"].tolist()) for data in dataset]
+
+        self.data = dataset
         self.length = len(self.data)
 
         if split is None:
