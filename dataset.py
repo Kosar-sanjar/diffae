@@ -113,9 +113,10 @@ class BaseLMDB(Dataset):
             key = f'data-{str(index).zfill(self.zfill)}'.encode('utf-8')
             
             img_bytes = txn.get(key)
-        return img_bytes
 
-        # buffer = BytesIO(img_bytes)
+        buffer = BytesIO(img_bytes)
+        return buffer
+
         # img = Image.open(buffer)
         # return img
 
