@@ -55,7 +55,7 @@ class EEGDataset:
         return eeg, label
 
 
-dataset = EEGDataset("eeg_5_95_std.pth")
+dataset = EEGDataset("datasets/eeg_5_95_std.pth")
 
 import argparse
 import multiprocessing
@@ -83,7 +83,7 @@ def prepare(env, n_worker=1):
             key = f"data-{str(i).zfill(5)}".encode("utf-8")
 
             with env.begin(write=True) as txn:
-                txn.put(key, data.tobytes())
+                txn.put(key, data)
 
         with env.begin(write=True) as txn:
             txn.put("length".encode("utf-8"), str(total).encode("utf-8"))
@@ -94,7 +94,7 @@ if __name__ == "__main__":
     Generate 11965 data samples with shape (128, 500) and save to LMDB
     """
     num_workers = 16
-    out_path = 'datasets/data.lmdb'
+    out_path = 'datasets/ffhq256.lmdb'
 
     if not os.path.exists(out_path):
         os.makedirs(out_path)
