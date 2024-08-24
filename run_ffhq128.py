@@ -18,13 +18,13 @@ if __name__ == '__main__':
 
     # train the latent DPM
     # NOTE: only need a single gpu
-    gpus = [0]
-    conf = ffhq128_autoenc_latent()
-    train(conf, gpus=gpus)
+    # gpus = [0]
+    # conf = ffhq128_autoenc_latent()
+    # train(conf, gpus=gpus)
 
-    # unconditional sampling score
-    # NOTE: a lot of gpus can speed up this process
-    # gpus = [0, 1, 2, 3]
-    gpus = [0]
-    conf.eval_programs = ['fid(10,10)']
-    train(conf, gpus=gpus, mode='eval')
+    # # unconditional sampling score
+    # # NOTE: a lot of gpus can speed up this process
+    # # gpus = [0, 1, 2, 3]
+    # gpus = [0]
+    # conf.eval_programs = ['fid(10,10)']
+    # train(conf, gpus=gpus, mode='eval')
