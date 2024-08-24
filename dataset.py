@@ -116,7 +116,7 @@ class BaseLMDB(Dataset):
             
             img_bytes = txn.get(key)
 
-        buffer = np.frombuffer(img_bytes)
+        buffer = np.frombuffer(img_bytes).reshape((128,128))
         return buffer
 
         # img = Image.open(buffer)
