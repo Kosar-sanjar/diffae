@@ -117,11 +117,11 @@ class BaseLMDB(Dataset):
             img_bytes = txn.get(key)
 
         buffer = np.frombuffer(img_bytes).reshape((128,128,3))
-        # normalized_data = (buffer - np.min(buffer)) / (np.max(buffer) - np.min(buffer))
-        # scaled_data = normalized_data * 255
-        # integer_data = scaled_data.astype(np.uint8)
-        # img = Image.fromarray(integer_data,"RGB")
-        img = Image.fromarray(buffer,"RGB")
+        normalized_data = (buffer - np.min(buffer)) / (np.max(buffer) - np.min(buffer))
+        scaled_data = normalized_data * 255
+        integer_data = scaled_data.astype(np.uint8)
+        img = Image.fromarray(integer_data,"RGB")
+        # img = Image.fromarray(buffer,"RGB")
 
         return img
 
