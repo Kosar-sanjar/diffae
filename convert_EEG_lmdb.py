@@ -64,7 +64,8 @@ def prepare(env, n_worker=1):
 
     with multiprocessing.Pool(n_worker) as pool:
         for i in tqdm(range(total)):
-            data = np.array(dataset.data[i]["eeg"].tolist())[:,:128]
+            data = np.array(dataset.data[i]["eeg"].tolist())
+            data = np.stack((data[:,:128],data[:,128:256],data[:,256:384]),axis=2)
             key = f"data-{str(i).zfill(5)}".encode("utf-8")
 
             with env.begin(write=True) as txn:
