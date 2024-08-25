@@ -206,8 +206,8 @@ class FFHQlmdb(Dataset):
         transform = [
             # transforms.Resize(image_size),
         ]
-        # if do_augment:
-        #     transform.append(transforms.RandomHorizontalFlip())
+        if do_augment:
+            transform.append(transforms.RandomHorizontalFlip())
         if as_tensor:
             transform.append(transforms.ToTensor())
         # if do_normalize:
