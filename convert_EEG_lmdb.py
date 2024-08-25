@@ -72,8 +72,8 @@ def prepare(env, n_worker=1):
             # 2d EEG data 128x128
             # data = data[:,:128]
 
-            # 2d EEG data 128x496
-            data = data[:,:496]
+            # 2d EEG data 128x400
+            data = data[:,:400]
 
             key = f"data-{str(i).zfill(5)}".encode("utf-8")
 
