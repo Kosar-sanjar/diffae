@@ -65,10 +65,33 @@ class ImageDataset(Dataset):
         path = os.path.join(self.folder, self.paths[index])
         img = Image.open(path)
         # if the image is 'rgba'!
-        img = img.convert('RGB')
+        img = img.convert('1')
         if self.transform is not None:
             img = self.transform(img)
         return {'img': img, 'index': index}
+
+
+class NumpyDataset(Dataset):
+    def __init__(
+        self,
+        arrays,
+        do_transform: bool = True,
+    ):
+        super().__init__()
+        self.arrays = arrays
+        transform = []
+        if do_transform:
+            transform.append(transforms.ToTensor())
+        self.transform = transforms.Compose(transform)
+
+    def __len__(self):
+        return len(self.arrays)
+
+    def __getitem__(self, index):
+        img = self.arrays[index]
+        if self.transform is not None:
+            img = self.transform(img)
+        return {'EEG': img, 'index': index}
 
 
 class SubsetDataset(Dataset):
@@ -140,8 +163,9 @@ class BaseLMDB(Dataset):
         # 2d (RGB) eeg input 128x400 not image it
         buffer = np.frombuffer(img_bytes).reshape((128,400))
         # normalized_data = (buffer - np.min(buffer)) / (np.max(buffer) - np.min(buffer))
-        scaled_data = buffer * 100_000_000_000
-        integer_data = scaled_data.astype(np.uint8)
+        # normalized_data = buffer - np.min(buffer)
+        # scaled_data = normalized_data * 1
+        integer_data = buffer.astype(np.float32)
         # img = Image.fromarray(integer_data)
         return integer_data
         

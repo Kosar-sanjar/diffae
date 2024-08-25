@@ -59,7 +59,7 @@ def prepare(env, n_worker=1):
     Generates 11965 data samples, each with shape (128, 500).
     """
 #    total = len(dataset.data)  # Number of data samples
-    total = 1100  # Number of data samples
+    total = 3100  # Number of data samples
 
 
     with multiprocessing.Pool(n_worker) as pool:
