@@ -260,6 +260,7 @@ class TrainConfig(BaseConfig):
 
     @property
     def model_out_channels(self):
+        # return 3
         return 1
 
     def make_T_sampler(self):
@@ -401,6 +402,7 @@ class TrainConfig(BaseConfig):
                 enc_grad_checkpoint=self.net_enc_grad_checkpoint,
                 enc_attn_resolutions=self.net_enc_attn,
                 image_size=self.img_size,
+                # in_channels=3,
                 in_channels=1,
                 model_channels=self.net_ch,
                 num_classes=None,
