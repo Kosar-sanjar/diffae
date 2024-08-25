@@ -46,16 +46,16 @@ class ImageDataset(Dataset):
             self.paths = sorted(self.paths)
 
         transform = [
-            transforms.Resize(image_size),
-            transforms.CenterCrop(image_size),
+            # transforms.Resize(image_size),
+            # transforms.CenterCrop(image_size),
         ]
-        if do_augment:
-            transform.append(transforms.RandomHorizontalFlip())
+        # if do_augment:
+        #     transform.append(transforms.RandomHorizontalFlip())
         if do_transform:
             transform.append(transforms.ToTensor())
-        if do_normalize:
-            transform.append(
-                transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)))
+        # if do_normalize:
+        #     transform.append(
+        #         transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)))
         self.transform = transforms.Compose(transform)
 
     def __len__(self):
@@ -161,16 +161,16 @@ def make_transform(
     if crop_d2c:
         transform = [
             d2c_crop(),
-            transforms.Resize(image_size),
+            # transforms.Resize(image_size),
         ]
     else:
         transform = [
-            transforms.Resize(image_size),
-            transforms.CenterCrop(image_size),
+            # transforms.Resize(image_size),
+            # transforms.CenterCrop(image_size),
         ]
-    transform.append(transforms.RandomHorizontalFlip(p=flip_prob))
+    # transform.append(transforms.RandomHorizontalFlip(p=flip_prob))
     transform.append(transforms.ToTensor())
-    transform.append(transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)))
+    # transform.append(transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)))
     transform = transforms.Compose(transform)
     return transform
 
@@ -206,8 +206,8 @@ class FFHQlmdb(Dataset):
         transform = [
             # transforms.Resize(image_size),
         ]
-        if do_augment:
-            transform.append(transforms.RandomHorizontalFlip())
+        # if do_augment:
+        #     transform.append(transforms.RandomHorizontalFlip())
         if as_tensor:
             transform.append(transforms.ToTensor())
         # if do_normalize:
@@ -281,21 +281,21 @@ class CelebAlmdb(Dataset):
         if crop_d2c:
             transform = [
                 d2c_crop(),
-                transforms.Resize(image_size),
+                # transforms.Resize(image_size),
             ]
         else:
             transform = [
-                transforms.Resize(image_size),
-                transforms.CenterCrop(image_size),
+                # transforms.Resize(image_size),
+                # transforms.CenterCrop(image_size),
             ]
 
-        if do_augment:
-            transform.append(transforms.RandomHorizontalFlip())
+        # if do_augment:
+        #     transform.append(transforms.RandomHorizontalFlip())
         if as_tensor:
             transform.append(transforms.ToTensor())
-        if do_normalize:
-            transform.append(
-                transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)))
+        # if do_normalize:
+        #     transform.append(
+        #         transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)))
         self.transform = transforms.Compose(transform)
 
     def __len__(self):
@@ -325,16 +325,16 @@ class Horse_lmdb(Dataset):
         self.length = len(self.data)
 
         transform = [
-            transforms.Resize(image_size),
-            transforms.CenterCrop(image_size),
+            # transforms.Resize(image_size),
+            # transforms.CenterCrop(image_size),
         ]
-        if do_augment:
-            transform.append(transforms.RandomHorizontalFlip())
+        # if do_augment:
+            # transform.append(transforms.RandomHorizontalFlip())
         if do_transform:
             transform.append(transforms.ToTensor())
-        if do_normalize:
-            transform.append(
-                transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)))
+        # if do_normalize:
+        #     transform.append(
+        #         transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)))
         self.transform = transforms.Compose(transform)
 
     def __len__(self):
@@ -362,16 +362,16 @@ class Bedroom_lmdb(Dataset):
         self.length = len(self.data)
 
         transform = [
-            transforms.Resize(image_size),
-            transforms.CenterCrop(image_size),
+            # transforms.Resize(image_size),
+            # transforms.CenterCrop(image_size),
         ]
-        if do_augment:
-            transform.append(transforms.RandomHorizontalFlip())
+        # if do_augment:
+        #     transform.append(transforms.RandomHorizontalFlip())
         if do_transform:
             transform.append(transforms.ToTensor())
-        if do_normalize:
-            transform.append(
-                transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)))
+        # if do_normalize:
+        #     transform.append(
+        #         transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)))
         self.transform = transforms.Compose(transform)
 
     def __len__(self):
@@ -425,20 +425,20 @@ class CelebAttrDataset(Dataset):
         if d2c:
             transform = [
                 d2c_crop(),
-                transforms.Resize(image_size),
+                # transforms.Resize(image_size),
             ]
         else:
             transform = [
-                transforms.Resize(image_size),
-                transforms.CenterCrop(image_size),
+                # transforms.Resize(image_size),
+                # transforms.CenterCrop(image_size),
             ]
-        if do_augment:
-            transform.append(transforms.RandomHorizontalFlip())
+        # if do_augment:
+        #     transform.append(transforms.RandomHorizontalFlip())
         if do_transform:
             transform.append(transforms.ToTensor())
-        if do_normalize:
-            transform.append(
-                transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)))
+        # if do_normalize:
+        #     transform.append(
+        #         transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)))
         self.transform = transforms.Compose(transform)
 
         with open(attr_path) as f:
@@ -539,20 +539,20 @@ class CelebAttrFewshotDataset(Dataset):
         if d2c:
             transform = [
                 d2c_crop(),
-                transforms.Resize(img_size),
+                # transforms.Resize(img_size),
             ]
         else:
             transform = [
-                transforms.Resize(img_size),
-                transforms.CenterCrop(img_size),
+                # transforms.Resize(img_size),
+                # transforms.CenterCrop(img_size),
             ]
-        if do_augment:
-            transform.append(transforms.RandomHorizontalFlip())
+        # if do_augment:
+        #     transform.append(transforms.RandomHorizontalFlip())
         if do_transform:
             transform.append(transforms.ToTensor())
-        if do_normalize:
-            transform.append(
-                transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)))
+        # if do_normalize:
+        #     transform.append(
+        #         transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)))
         self.transform = transforms.Compose(transform)
 
     def pos_count(self, cls_name):
@@ -641,16 +641,16 @@ class CelebHQAttrDataset(Dataset):
         self.data = BaseLMDB(path, original_resolution, zfill=5)
 
         transform = [
-            transforms.Resize(image_size),
-            transforms.CenterCrop(image_size),
+            # transforms.Resize(image_size),
+            # transforms.CenterCrop(image_size),
         ]
-        if do_augment:
-            transform.append(transforms.RandomHorizontalFlip())
+        # if do_augment:
+        #     transform.append(transforms.RandomHorizontalFlip())
         if do_transform:
             transform.append(transforms.ToTensor())
-        if do_normalize:
-            transform.append(
-                transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)))
+        # if do_normalize:
+        #     transform.append(
+        #         transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)))
         self.transform = transforms.Compose(transform)
 
         with open(attr_path) as f:
@@ -699,16 +699,16 @@ class CelebHQAttrFewshotDataset(Dataset):
         self.data = BaseLMDB(path, original_resolution, zfill=5)
 
         transform = [
-            transforms.Resize(image_size),
-            transforms.CenterCrop(image_size),
+            # transforms.Resize(image_size),
+            # transforms.CenterCrop(image_size),
         ]
-        if do_augment:
-            transform.append(transforms.RandomHorizontalFlip())
+        # if do_augment:
+        #     transform.append(transforms.RandomHorizontalFlip())
         if do_transform:
             transform.append(transforms.ToTensor())
-        if do_normalize:
-            transform.append(
-                transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)))
+        # if do_normalize:
+        #     transform.append(
+        #         transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)))
         self.transform = transforms.Compose(transform)
 
         self.df = pd.read_csv(f'data/celebahq_fewshots/K{K}_{cls_name}.csv',
