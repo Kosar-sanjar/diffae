@@ -59,13 +59,19 @@ def prepare(env, n_worker=1):
     Generates 11965 data samples, each with shape (128, 500).
     """
 #    total = len(dataset.data)  # Number of data samples
-    total = 1100  # Number of data samples
+    total = 100  # Number of data samples
 
 
     with multiprocessing.Pool(n_worker) as pool:
         for i in tqdm(range(total)):
             data = np.array(dataset.data[i]["eeg"].tolist())
-            data = np.stack((data[:,:128],data[:,128:256],data[:,256:384]),axis=2)
+
+            # 3d EEG data
+            #data = np.stack((data[:,:128],data[:,128:256],data[:,256:384]),axis=2)
+            
+            # 2d EEG data 128x128
+            data = data[:,:128]
+
             key = f"data-{str(i).zfill(5)}".encode("utf-8")
 
             with env.begin(write=True) as txn:
