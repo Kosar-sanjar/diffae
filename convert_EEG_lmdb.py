@@ -70,7 +70,10 @@ def prepare(env, n_worker=1):
             #data = np.stack((data[:,:128],data[:,128:256],data[:,256:384]),axis=2)
             
             # 2d EEG data 128x128
-            data = data[:,:128]
+            # data = data[:,:128]
+
+            # 2d EEG data 128x496
+            data = data[:,:496]
 
             key = f"data-{str(i).zfill(5)}".encode("utf-8")
 

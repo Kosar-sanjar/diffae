@@ -123,8 +123,15 @@ class BaseLMDB(Dataset):
         # integer_data = scaled_data.astype(np.uint8)
         # img = Image.fromarray(integer_data,"RGB")
         
-        # 2d (RGB) eeg input
-        buffer = np.frombuffer(img_bytes).reshape((128,128))
+        # 2d (RGB) eeg input 128x128
+        # buffer = np.frombuffer(img_bytes).reshape((128,128))
+        # normalized_data = (buffer - np.min(buffer)) / (np.max(buffer) - np.min(buffer))
+        # scaled_data = normalized_data * 255
+        # integer_data = scaled_data.astype(np.uint8)
+        # img = Image.fromarray(integer_data)
+
+        # 2d (RGB) eeg input 128x499
+        buffer = np.frombuffer(img_bytes).reshape((128,496))
         normalized_data = (buffer - np.min(buffer)) / (np.max(buffer) - np.min(buffer))
         scaled_data = normalized_data * 255
         integer_data = scaled_data.astype(np.uint8)
