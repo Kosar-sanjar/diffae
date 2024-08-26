@@ -36,7 +36,7 @@ def autoenc_base():
     """
     conf = TrainConfig()
     # conf.batch_size = 32
-    conf.batch_size = 1
+    conf.batch_size = 4
     conf.beatgans_gen_type = GenerativeType.ddim
     conf.beta_scheduler = 'linear'
     conf.data_name = 'ffhq'
@@ -217,11 +217,11 @@ def ffhq128_ddpm_130M():
 def ffhq128_autoenc_130M():
     conf = ffhq128_autoenc_base()
     #conf.total_samples = 130_000_000
-    conf.total_samples = 1000
+    conf.total_samples = 3000
     #conf.eval_ema_every_samples = 10_000_000
-    conf.eval_ema_every_samples = 1000
+    conf.eval_ema_every_samples = 3000
     #conf.eval_every_samples = 10_000_000
-    conf.eval_every_samples = 1000
+    conf.eval_every_samples = 3000
     conf.name = 'ffhq128_autoenc_130M'
     return conf
 
