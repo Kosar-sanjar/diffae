@@ -8,6 +8,7 @@ datasets/celebahq
 datasets/celebahq256.lmdb
 datasets/ffhq
 datasets/ffhq256.lmdb
+datasets/EEGtest.lmdb
 datasets/celeba.lmdb
 datasets/celeba
 datasets/eeg_5_95_std.pth
