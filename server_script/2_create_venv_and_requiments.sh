@@ -10,4 +10,3 @@ cat requirements_server.txt | xargs -t -L 1 -P3 pip download -q
 cat requirements_server.txt | xargs -t -L 1 -P1 pip install -q
 
 cd $CURRENT_PATH
-pip install gdown
