@@ -37,12 +37,13 @@ class EEGDataset:
     # Get item
     def __getitem__(self, i):
         # Process EEG
-        eeg = self.data[i]["eeg"].float().t()
-        eeg = eeg[opt.time_low:opt.time_high,:]
-
-        if opt.model_type == "model10":
-            eeg = eeg.t()
-            eeg = eeg.view(1,128,opt.time_high-opt.time_low)
+        eeg = self.data[i]["eeg"].float()
+        # eeg = self.data[i]["eeg"].float().t()
+        eeg = eeg[:,20:460]
+    
+        # if opt.model_type == "model10":
+        #     eeg = eeg.t()
+        #     eeg = eeg.view(1,128,opt.time_high-opt.time_low)
         # Get label
         label = self.data[i]["label"]
         # Return
@@ -50,21 +51,23 @@ class EEGDataset:
 
 
 dataset = EEGDataset("datasets/eeg_5_95_std.pth")
+indexes = [i for i in range(len(dataset)) if 460 <= dataset.data[i]["eeg"].size(1) <= 600]
+np.random.shuffle(indexes)
 
+test_size = 100
+test_index= indexes[:test_size]
+train_size = 3000
+train_index= indexes[test_size:train_size+test_size]
 
-
-def prepare(env, n_worker=1):
+def prepare(env,dataset,select_indexes, n_worker=1):
     """
     Function to prepare the LMDB database.
     Generates 11965 data samples, each with shape (128, 500).
     """
-#    total = len(dataset.data)  # Number of data samples
-    total = 3100  # Number of data samples
-
 
     with multiprocessing.Pool(n_worker) as pool:
-        for i in tqdm(range(total)):
-            data = np.array(dataset.data[i]["eeg"].tolist())
+        for i in tqdm(select_indexes):
+            data = np.array(dataset[i][0].tolist())
 
             # 3d EEG data
             #data = np.stack((data[:,:128],data[:,128:256],data[:,256:384]),axis=2)
@@ -73,7 +76,7 @@ def prepare(env, n_worker=1):
             # data = data[:,:128]
 
             # 2d EEG data 128x400
-            data = data[:,:400]
+            # data = data[:,:400]
 
             key = f"data-{str(i).zfill(5)}".encode("utf-8")
 
@@ -89,11 +92,19 @@ if __name__ == "__main__":
     Generate 11965 data samples with shape (128, 500) and save to LMDB
     """
     num_workers = 16
-    out_path = 'datasets/ffhq256.lmdb'
+    train_out_path = 'datasets/ffhq256.lmdb'
+    test_out_path = 'datasets/EEGtest.lmdb'
 
-    if not os.path.exists(out_path):
-        os.makedirs(out_path)
 
-    with lmdb.open(out_path, map_size=1024**4, readahead=False) as env:
-        prepare(env, num_workers)
+    if not os.path.exists(train_out_path):
+        os.makedirs(train_out_path)
+
+    with lmdb.open(train_out_path, map_size=1024**4, readahead=False) as env:
+        prepare(env,dataset,train_index, num_workers)
+    
+    if not os.path.exists(test_out_path):
+        os.makedirs(test_out_path)
+
+    with lmdb.open(test_out_path, map_size=1024**4, readahead=False) as env:
+        prepare(env,dataset,test_index, num_workers)
 
