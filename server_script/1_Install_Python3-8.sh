@@ -2,8 +2,11 @@
 CURRENT_PATH=$(pwd)
 cd ~
 
+sudo add-apt-repository ppa:apt-fast/stable
 sudo apt-get update
-sudo apt-get install -y build-essential libssl-dev zlib1g-dev libbz2-dev \
+sudo apt-get -y install apt-fast
+
+sudo apt-fast install -y build-essential libssl-dev zlib1g-dev libbz2-dev \
                         libreadline-dev libsqlite3-dev wget curl llvm \
                         libncurses5-dev libncursesw5-dev xz-utils tk-dev \
                         libffi-dev liblzma-dev python3-openssl git libbz2-dev
