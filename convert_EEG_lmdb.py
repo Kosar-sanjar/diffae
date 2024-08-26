@@ -59,39 +59,43 @@ test_index= indexes[:test_size]
 train_size = 3000
 train_index= indexes[test_size:train_size+test_size]
 
-def prepare(env,dataset,select_indexes, n_worker=1):
+def process_data(index_and_i):
+    i, index = index_and_i
+    data = np.array(dataset[index][0].tolist())
+
+    # 3d EEG data
+    # data = np.stack((data[:,:128],data[:,128:256],data[:,256:384]),axis=2)
+    
+    # 2d EEG data 128x128
+    # data = data[:,:128]
+
+    # 2d EEG data 128x400
+    # data = data[:,:400]
+
+    key = f"data-{str(i).zfill(5)}".encode("utf-8")
+
+    with env.begin(write=True) as txn:
+        txn.put(key, data.tobytes())
+
+def prepare(env,select_indexes,n_worker=1):
     """
     Function to prepare the LMDB database.
     Generates 11965 data samples, each with shape (128, 500).
     """
 
+    # with multiprocessing.Pool(multiprocessing.cpu_count()) as pool:
     with multiprocessing.Pool(n_worker) as pool:
-        for i in tqdm(select_indexes):
-            data = np.array(dataset[i][0].tolist())
+        list(tqdm(pool.imap(process_data, enumerate(select_indexes)), total=len(select_indexes)))
 
-            # 3d EEG data
-            #data = np.stack((data[:,:128],data[:,128:256],data[:,256:384]),axis=2)
-            
-            # 2d EEG data 128x128
-            # data = data[:,:128]
-
-            # 2d EEG data 128x400
-            # data = data[:,:400]
-
-            key = f"data-{str(i).zfill(5)}".encode("utf-8")
-
-            with env.begin(write=True) as txn:
-                txn.put(key, data.tobytes())
-
-        with env.begin(write=True) as txn:
-            txn.put("length".encode("utf-8"), str(len(select_indexes)).encode("utf-8"))
+    with env.begin(write=True) as txn:
+        txn.put("length".encode("utf-8"), str(len(select_indexes)).encode("utf-8"))
 
 
 if __name__ == "__main__":
     """
     Generate 11965 data samples with shape (128, 500) and save to LMDB
     """
-    num_workers = 16
+    num_workers = 100
     train_out_path = 'datasets/ffhq256.lmdb'
     test_out_path = 'datasets/EEGtest.lmdb'
 
@@ -100,11 +104,11 @@ if __name__ == "__main__":
         os.makedirs(train_out_path)
 
     with lmdb.open(train_out_path, map_size=1024**4, readahead=False) as env:
-        prepare(env,dataset,train_index, num_workers)
+        prepare(env,train_index,num_workers)
     
     if not os.path.exists(test_out_path):
         os.makedirs(test_out_path)
 
     with lmdb.open(test_out_path, map_size=1024**4, readahead=False) as env:
-        prepare(env,dataset,test_index, num_workers)
+        prepare(env,test_index,num_workers)
 
