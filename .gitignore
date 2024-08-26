@@ -11,6 +11,7 @@ datasets/ffhq256.lmdb
 datasets/celeba.lmdb
 datasets/celeba
 datasets/eeg_5_95_std.pth
+datasets/block_splits_by_image_all.pth
 datasets/orignal_ffhq256.lmdb
 checkpoints
 
