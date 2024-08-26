@@ -84,7 +84,7 @@ def prepare(env,dataset,select_indexes, n_worker=1):
                 txn.put(key, data.tobytes())
 
         with env.begin(write=True) as txn:
-            txn.put("length".encode("utf-8"), str(total).encode("utf-8"))
+            txn.put("length".encode("utf-8"), str(len(select_indexes)).encode("utf-8"))
 
 
 if __name__ == "__main__":
