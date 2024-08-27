@@ -12,7 +12,7 @@ import pandas as pd
 
 import torchvision.transforms.functional as Ftrans
 import numpy as np
-
+import pickle
 
 
 class ImageDataset(Dataset):
@@ -69,6 +69,46 @@ class ImageDataset(Dataset):
         if self.transform is not None:
             img = self.transform(img)
         return {'img': img, 'index': index}
+
+class EEGImageDataset(Dataset):
+    def __init__(
+        self,
+        paths,
+        image_size,
+        do_transform: bool = True,
+
+    ):
+        super().__init__()
+        self.paths = paths
+        self.image_size = image_size
+
+        # relative paths (make it shorter, saves memory and faster to sort)
+
+        transform = [
+            # transforms.Resize(image_size),
+            # transforms.CenterCrop(image_size),
+        ]
+        # if do_augment:
+        #     transform.append(transforms.RandomHorizontalFlip())
+        if do_transform:
+            transform.append(transforms.ToTensor())
+        # if do_normalize:
+        #     transform.append(
+        #         transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)))
+        self.transform = transforms.Compose(transform)
+
+    def __len__(self):
+        return len(self.paths)
+
+    def __getitem__(self, index):
+        path = self.paths[index]
+        img = Image.open(path)
+        # if the image is 'rgba'!
+        img = img.convert('1')
+        if self.transform is not None:
+            img = self.transform(img)
+        return {'img': img, 'index': index}
+
 
 
 class NumpyDataset(Dataset):
@@ -160,9 +200,10 @@ class BaseLMDB(Dataset):
         # integer_data = scaled_data.astype(np.uint8)
         # img = Image.fromarray(integer_data)
 
-        # 2d (RGB) eeg input 128x400 not image it
-        window_size = 5 #window_size  of moving average 
-        buffer = np.frombuffer(img_bytes).reshape((128,440-window_size+1))
+        # 2d (RGB) eeg input 128x440 not image it
+        buffer = np.array(pickle.loads(img_bytes))
+        # buffer = np.frombuffer(img_bytes).reshape((128,400))
+        
         # normalized_data = (buffer - np.min(buffer)) / (np.max(buffer) - np.min(buffer))
         # normalized_data = buffer - np.min(buffer)
         # scaled_data = normalized_data * 1

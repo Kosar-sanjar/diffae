@@ -12,7 +12,9 @@ import os
 import pickle
 
 subject=0
-
+window_size = 5
+start_time=20
+end_time=500
 # Dataset class
 class EEGDataset:
 
@@ -39,7 +41,7 @@ class EEGDataset:
         # Process EEG
         eeg = self.data[i]["eeg"].float()
         # eeg = self.data[i]["eeg"].float().t()
-        eeg = eeg[:,20:460]
+        eeg = eeg[:,start_time:end_time+window_size-1]
     
         # if opt.model_type == "model10":
         #     eeg = eeg.t()
@@ -56,7 +58,7 @@ with open ("datasets/EEG_images.pickle","wb") as handle:
 with open ("datasets/EEG_labels.pickle","wb") as handle:
    pickle.dump(dataset.labels,handle,protocol=pickle.HIGHEST_PROTOCOL)
 
-indexes = [i for i in range(len(dataset)) if 460 <= dataset.data[i]["eeg"].size(1) <= 600]
+indexes = [i for i in range(len(dataset)) if (end_time+window_size-1) <= dataset.data[i]["eeg"].size(1) <= 600]
 np.random.shuffle(indexes)
 
 test_size = 100
@@ -67,7 +69,6 @@ train_index= indexes[test_size:train_size+test_size]
 def moving_average(arr, window_size):
     return np.convolve(arr, np.ones(window_size), 'valid') / window_size
 
-window_size = 5
 
 def process_data_train(index_and_i):
     i, index = index_and_i
@@ -84,11 +85,11 @@ def process_data_train(index_and_i):
 
     # 2d EEG data 128x400
     # data = data[:,:400]
-
     key = f"data-{str(i).zfill(5)}".encode("utf-8")
     with env.begin(write=True) as txn:
-        storedata= data.tobytes()
-        txn.put(key, storedata)
+        data= bytearray(pickle.dumps(data))
+        
+        txn.put(key, data)
 
 
 def process_data_test(index_and_i):
