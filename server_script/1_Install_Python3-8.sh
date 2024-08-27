@@ -13,7 +13,7 @@ sudo apt-fast install -y build-essential libssl-dev zlib1g-dev libbz2-dev \
 
 mkdir python38
 cd python38
-wget https://www.python.org/ftp/python/3.8.10/Python-3.8.10.tgz
+aria2c https://www.python.org/ftp/python/3.8.10/Python-3.8.10.tgz
 tar -xf Python-3.8.10.tgz
 
 cd Python-3.8.10
