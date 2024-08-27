@@ -23,7 +23,7 @@ class EEGDataset:
         # Load EEG signals
         loaded = torch.load(eeg_signals_path)
         if subject!=0:
-            self.data = [loaded['dataset'][i] for i in range(len(loaded['dataset']) ) if loaded['dataset'][i]['subject']==opt.subject]
+            self.data = [loaded['dataset'][i] for i in range(len(loaded['dataset']) ) if loaded['dataset'][i]['subject']==subject]
         else:
             self.data=loaded['dataset']
         self.labels = loaded["labels"]
@@ -61,10 +61,26 @@ with open ("datasets/EEG_labels.pickle","wb") as handle:
 indexes = [i for i in range(len(dataset)) if (end_time+window_size-1) <= dataset.data[i]["eeg"].size(1)]
 np.random.shuffle(indexes)
 
-test_size = 100
-test_index= indexes[:test_size]
-train_size = 11965
-train_index= indexes[test_size:train_size+test_size]
+test_dict={}
+for index in indexes[::-1]:
+    thislabel= dataset[index][1]
+    if len(test_dict.get(thislabel,[])) < 3 :
+        if len(test_dict.get(thislabel,[])) == 0 :
+            test_dict[thislabel] = [index]
+        else:
+            test_dict[thislabel] = test_dict.get(thislabel)+[index]
+
+        indexes.remove(index)
+
+test_index=[]
+for label in test_dict:
+    test_index.extend(test_dict[label])
+
+train_index=indexes
+# test_size = 100
+# test_index= indexes[:test_size]
+# train_size = 11965
+# train_index= indexes[test_size:train_size+test_size]
 
 def moving_average(arr, window_size):
     return np.convolve(arr, np.ones(window_size), 'valid') / window_size
