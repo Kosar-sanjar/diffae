@@ -9,7 +9,7 @@ import lmdb
 import numpy as np
 from tqdm import tqdm
 import os
-
+import pickle
 
 subject=0
 
@@ -51,6 +51,11 @@ class EEGDataset:
 
 
 dataset = EEGDataset("datasets/eeg_5_95_std.pth")
+with open ("datasets/EEG_images.pickle","wb") as handle:
+   pickle.dump(dataset.images,handle,protocol=pickle.HIGHEST_PROTOCOL)
+with open ("datasets/EEG_labels.pickle","wb") as handle:
+   pickle.dump(dataset.labels,handle,protocol=pickle.HIGHEST_PROTOCOL)
+
 indexes = [i for i in range(len(dataset)) if 460 <= dataset.data[i]["eeg"].size(1) <= 600]
 np.random.shuffle(indexes)
 
@@ -59,7 +64,7 @@ test_index= indexes[:test_size]
 train_size = 3000
 train_index= indexes[test_size:train_size+test_size]
 
-def process_data(index_and_i):
+def process_data_train(index_and_i):
     i, index = index_and_i
     data = np.array(dataset[index][0].tolist())
 
@@ -73,19 +78,39 @@ def process_data(index_and_i):
     # data = data[:,:400]
 
     key = f"data-{str(i).zfill(5)}".encode("utf-8")
-
     with env.begin(write=True) as txn:
-        txn.put(key, data.tobytes())
+        storedata= data.tobytes()
+        txn.put(key, storedata)
 
-def prepare(env,select_indexes,n_worker=1):
+
+def process_data_test(index_and_i):
+    i, index = index_and_i
+    data = np.array(dataset[index][0].tolist())
+    label = dataset[index][1]
+    image = dataset.data[index]["image"]
+    subject = dataset.data[index]["subject"]
+
+    key = f"data-{str(i).zfill(5)}".encode("utf-8")
+    with env.begin(write=True) as txn:
+        storedata={"data":data,"image":image,"label":label,"subject":subject}
+        storedata=bytearray(pickle.dumps(storedata))
+        txn.put(key, storedata)
+
+def prepare(env,select_indexes,n_worker=1,store_type="train"):
     """
     Function to prepare the LMDB database.
     Generates 11965 data samples, each with shape (128, 500).
     """
 
     # with multiprocessing.Pool(multiprocessing.cpu_count()) as pool:
-    with multiprocessing.Pool(n_worker) as pool:
-        list(tqdm(pool.imap(process_data, enumerate(select_indexes)), total=len(select_indexes)))
+    if store_type =="train":
+        with multiprocessing.Pool(n_worker) as pool:
+            list(tqdm(pool.imap(process_data_train, enumerate(select_indexes)), total=len(select_indexes)))
+    
+    if store_type =="test":
+        with multiprocessing.Pool(n_worker) as pool:
+            list(tqdm(pool.imap(process_data_test, enumerate(select_indexes)), total=len(select_indexes)))
+            
 
     with env.begin(write=True) as txn:
         txn.put("length".encode("utf-8"), str(len(select_indexes)).encode("utf-8"))
@@ -95,7 +120,7 @@ if __name__ == "__main__":
     """
     Generate 11965 data samples with shape (128, 500) and save to LMDB
     """
-    num_workers = 100
+    num_workers = 16
     train_out_path = 'datasets/ffhq256.lmdb'
     test_out_path = 'datasets/EEGtest.lmdb'
 
@@ -104,11 +129,11 @@ if __name__ == "__main__":
         os.makedirs(train_out_path)
 
     with lmdb.open(train_out_path, map_size=1024**4, readahead=False) as env:
-        prepare(env,train_index,num_workers)
+        prepare(env,train_index,num_workers,"train")
     
     if not os.path.exists(test_out_path):
         os.makedirs(test_out_path)
 
     with lmdb.open(test_out_path, map_size=1024**4, readahead=False) as env:
-        prepare(env,test_index,num_workers)
+        prepare(env,test_index,num_workers,"test")
 
