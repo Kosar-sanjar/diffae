@@ -4,6 +4,8 @@ generated
 latent_infer
 datasets/EEG_images.pickle
 datasets/EEG_labels.pickle
+datasets/images
+datasets/images.zip
 datasets/bedroom256.lmdb
 datasets/horse256.lmdb
 datasets/celebahq
