@@ -64,10 +64,18 @@ test_index= indexes[:test_size]
 train_size = 3000
 train_index= indexes[test_size:train_size+test_size]
 
+def moving_average(arr, window_size):
+    return np.convolve(arr, np.ones(window_size), 'valid') / window_size
+
+window_size = 5
+
 def process_data_train(index_and_i):
     i, index = index_and_i
     data = np.array(dataset[index][0].tolist())
-
+    
+    # apply moving average
+    data = np.apply_along_axis(moving_average, axis=1, arr=data, window_size=window_size)
+    
     # 3d EEG data
     # data = np.stack((data[:,:128],data[:,128:256],data[:,256:384]),axis=2)
     
@@ -86,6 +94,10 @@ def process_data_train(index_and_i):
 def process_data_test(index_and_i):
     i, index = index_and_i
     data = np.array(dataset[index][0].tolist())
+    
+    # apply moving average
+    data = np.apply_along_axis(moving_average, axis=1, arr=data, window_size=window_size)
+    
     label = dataset[index][1]
     image = dataset.data[index]["image"]
     subject = dataset.data[index]["subject"]

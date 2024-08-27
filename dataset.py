@@ -161,7 +161,8 @@ class BaseLMDB(Dataset):
         # img = Image.fromarray(integer_data)
 
         # 2d (RGB) eeg input 128x400 not image it
-        buffer = np.frombuffer(img_bytes).reshape((128,440))
+        window_size = 5 #window_size  of moving average 
+        buffer = np.frombuffer(img_bytes).reshape((128,440-window_size+1))
         # normalized_data = (buffer - np.min(buffer)) / (np.max(buffer) - np.min(buffer))
         # normalized_data = buffer - np.min(buffer)
         # scaled_data = normalized_data * 1
