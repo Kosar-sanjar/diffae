@@ -2,6 +2,8 @@ temp
 __pycache__
 generated
 latent_infer
+predicted
+Similarity-Distance Matrix Heatmap.jpg
 datasets/EEG_images.pickle
 datasets/EEG_labels.pickle
 datasets/images
