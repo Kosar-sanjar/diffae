@@ -147,9 +147,9 @@ def ffhq128_autoenc_base():
     # final resolution = 4x4
     conf.net_enc_channel_mult = (1, 1, 2, 3, 4, 4)
     #conf.eval_ema_every_samples = 10_000_000
-    conf.eval_ema_every_samples = 1000
+    conf.eval_ema_every_samples = 11865
     #conf.eval_every_samples = 10_000_000
-    conf.eval_every_samples = 1000
+    conf.eval_every_samples = 11865
     conf.make_model_conf()
     return conf
 
@@ -217,11 +217,11 @@ def ffhq128_ddpm_130M():
 def ffhq128_autoenc_130M():
     conf = ffhq128_autoenc_base()
     #conf.total_samples = 130_000_000
-    conf.total_samples = 3000
+    conf.total_samples = 11865
     #conf.eval_ema_every_samples = 10_000_000
-    conf.eval_ema_every_samples = 3000
+    conf.eval_ema_every_samples = 11865
     #conf.eval_every_samples = 10_000_000
-    conf.eval_every_samples = 3000
+    conf.eval_every_samples = 11865
     conf.name = 'ffhq128_autoenc_130M'
     return conf
 

@@ -14,7 +14,7 @@ import pickle
 subject=0
 window_size = 5
 start_time=20
-end_time=500
+end_time=420
 # Dataset class
 class EEGDataset:
 
@@ -58,12 +58,12 @@ with open ("datasets/EEG_images.pickle","wb") as handle:
 with open ("datasets/EEG_labels.pickle","wb") as handle:
    pickle.dump(dataset.labels,handle,protocol=pickle.HIGHEST_PROTOCOL)
 
-indexes = [i for i in range(len(dataset)) if (end_time+window_size-1) <= dataset.data[i]["eeg"].size(1) <= 600]
+indexes = [i for i in range(len(dataset)) if (end_time+window_size-1) <= dataset.data[i]["eeg"].size(1)]
 np.random.shuffle(indexes)
 
 test_size = 100
 test_index= indexes[:test_size]
-train_size = 3000
+train_size = 11965
 train_index= indexes[test_size:train_size+test_size]
 
 def moving_average(arr, window_size):

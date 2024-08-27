@@ -85,8 +85,8 @@ class EEGImageDataset(Dataset):
         # relative paths (make it shorter, saves memory and faster to sort)
 
         transform = [
-            # transforms.Resize(image_size),
-            # transforms.CenterCrop(image_size),
+            transforms.Resize(image_size),
+            transforms.CenterCrop(image_size),
         ]
         # if do_augment:
         #     transform.append(transforms.RandomHorizontalFlip())
