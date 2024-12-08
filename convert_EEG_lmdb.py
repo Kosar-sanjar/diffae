@@ -85,13 +85,35 @@ train_index=indexes
 def moving_average(arr, window_size):
     return np.convolve(arr, np.ones(window_size), 'valid') / window_size
 
-
+## i change this section:
 def process_data_train(index_and_i):
     i, index = index_and_i
     data = np.array(dataset[index][0].tolist())
     
     # apply moving average
     data = np.apply_along_axis(moving_average, axis=1, arr=data, window_size=window_size)
+    
+    # Retrieve corresponding image and label
+    image = dataset.images[index]  # Ensure this is a PIL Image or similar
+    label = dataset.labels[index]
+    # Create a dictionary to store both EEG data and image
+    storedata = {
+        "data": data,           # EEG data
+        "image": image,         # Corresponding image
+        "label": label,         # Label (if applicable)
+        "subject": dataset.data[index]["subject"]  # Subject info
+    }
+    
+    # Serialize the dictionary using pickle
+    serialized_data = bytearray(pickle.dumps(storedata))
+    
+    # Generate the LMDB key
+    key = f"data-{str(i).zfill(5)}".encode("utf-8")
+    
+    # Store the serialized data in LMDB
+    with env.begin(write=True) as txn:
+        txn.put(key, serialized_data)
+
     
     # 3d EEG data
     # data = np.stack((data[:,:128],data[:,128:256],data[:,256:384]),axis=2)
@@ -101,11 +123,11 @@ def process_data_train(index_and_i):
 
     # 2d EEG data 128x400
     # data = data[:,:400]
-    key = f"data-{str(i).zfill(5)}".encode("utf-8")
-    with env.begin(write=True) as txn:
-        data= bytearray(pickle.dumps(data))
+    # key = f"data-{str(i).zfill(5)}".encode("utf-8")
+    # with env.begin(write=True) as txn:
+    #     data= bytearray(pickle.dumps(data))
         
-        txn.put(key, data)
+    #     txn.put(key, data)
 
 
 def process_data_test(index_and_i):
@@ -147,22 +169,20 @@ def prepare(env,select_indexes,n_worker=1,store_type="train"):
 
 if __name__ == "__main__":
     """
-    Generate 11965 data samples with shape (128, 500) and save to LMDB
+    Generate data samples with shape (128, 500) and save to LMDB.
     """
     num_workers = 16
-    train_out_path = 'datasets/ffhq256.lmdb'
+    train_out_path = 'datasets/eeg_ffhqlmdb256.lmdb'  # Updated training LMDB path
     test_out_path = 'datasets/EEGtest.lmdb'
-
 
     if not os.path.exists(train_out_path):
         os.makedirs(train_out_path)
 
     with lmdb.open(train_out_path, map_size=1024**4, readahead=False) as env:
-        prepare(env,train_index,num_workers,"train")
+        prepare(env, train_index, num_workers, "train")
     
     if not os.path.exists(test_out_path):
         os.makedirs(test_out_path)
 
     with lmdb.open(test_out_path, map_size=1024**4, readahead=False) as env:
-        prepare(env,test_index,num_workers,"test")
-
+        prepare(env, test_index, num_workers, "test")
