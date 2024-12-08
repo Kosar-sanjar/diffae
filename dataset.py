@@ -13,7 +13,75 @@ import pandas as pd
 import torchvision.transforms.functional as Ftrans
 import numpy as np
 import pickle
+from torch.utils.data import Dataset
+from torchvision import transforms
+import pickle
 
+class EEGFFHQlmdbDataset(Dataset):
+    def __init__(
+        self,
+        path,
+        image_size,
+        transform: bool = True,
+        normalize: bool = True,
+    ):
+        """
+        Dataset class to load EEG signals and corresponding images from an LMDB database.
+        
+        Args:
+            path (str): Path to the LMDB database.
+            image_size (int): Desired image size after resizing.
+            transform (bool): Whether to apply image transformations.
+            normalize (bool): Whether to normalize the images.
+        """
+        super().__init__()
+        self.path = path
+        self.image_size = image_size
+        self.transform_flag = transform
+        self.normalize_flag = normalize
+
+        # Initialize the BaseLMDB
+        self.data = BaseLMDB(path, original_resolution=image_size)
+        self.length = len(self.data)
+
+        # Define image transformations
+        transform_list = []
+        if self.transform_flag:
+            transform_list.extend([
+                transforms.Resize((image_size, image_size)),
+                transforms.CenterCrop((image_size, image_size)),
+            ])
+        transform_list.append(transforms.ToTensor())
+        if self.normalize_flag:
+            transform_list.append(transforms.Normalize((0.485, 0.456, 0.406), 
+                                                        (0.229, 0.224, 0.225)))  # ImageNet statistics
+        self.transform = transforms.Compose(transform_list)
+
+    def __len__(self):
+        return self.length
+
+    def __getitem__(self, index):
+        # Retrieve the serialized data from LMDB
+        serialized_data = self.data[index]
+        storedata = pickle.loads(serialized_data)
+        
+        # Extract EEG data and image
+        eeg = storedata["data"]        # Shape: (channels, time_steps)
+        image = storedata["image"]    # PIL Image
+
+        # Convert EEG data to tensor
+        eeg_tensor = torch.tensor(eeg).float()  # Shape: (channels, time_steps)
+        
+        # Apply image transformations
+        if self.transform is not None:
+            image = self.transform(image)  # Shape: (3, H, W)
+        
+        return {
+            "eeg": eeg_tensor,    # EEG signal
+            "image": image,       # Corresponding image
+            "label": storedata.get("label", -1),  # Label (if applicable)
+            "subject": storedata.get("subject", -1)  # Subject info
+        }
 
 class ImageDataset(Dataset):
     def __init__(
