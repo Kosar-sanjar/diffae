@@ -9,7 +9,7 @@ from diffusion.resample import UniformSampler
 from diffusion.diffusion import space_timesteps
 from typing import Tuple
 
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Subset
 
 from config_base import BaseConfig
 from dataset import *
@@ -35,29 +35,49 @@ data_paths = {
     'celeba_relight': os.path.expanduser('datasets/celeba_hq_light/celeba_light.txt'),
 }
 
+
 @dataclass
 class PretrainConfig(BaseConfig):
     name: str
     path: str
 
+
 # Define separate configuration classes for Semantic Encoder and Conditional DDIM
 @dataclass
 class SemanticEncoderConfig:
     embedding_dim: int
-    # Add other Semantic Encoder specific configurations here
+    input_channels: int = 3  # Example parameter, adjust as needed
+    hidden_layers: Tuple[int] = (256, 512)  # Example hidden layers
+    activation: Activation = Activation.relu  # Example activation
 
     def make_model(self):
         # Initialize and return the Semantic Encoder model
-        return SemanticEncoder(embedding_dim=self.embedding_dim)
+        return SemanticEncoder(
+            embedding_dim=self.embedding_dim,
+            input_channels=self.input_channels,
+            hidden_layers=self.hidden_layers,
+            activation=self.activation.get_act()
+        )
+
 
 @dataclass
 class ConditionalDDIMConfig:
     embedding_dim: int
-    # Add other Conditional DDIM specific configurations here
+    img_size: int = 64
+    output_channels: int = 3  # RGB images
+    hidden_layers: Tuple[int] = (256, 512, 1024)  # Example hidden layers
+    activation: Activation = Activation.relu  # Example activation
 
     def make_model(self):
         # Initialize and return the Conditional DDIM model
-        return ConditionalDDIM(embedding_dim=self.embedding_dim)
+        return ConditionalDDIM(
+            embedding_dim=self.embedding_dim,
+            img_size=self.img_size,
+            output_channels=self.output_channels,
+            hidden_layers=self.hidden_layers,
+            activation=self.activation.get_act()
+        )
+
 
 @dataclass
 class TrainConfig(BaseConfig):
@@ -73,6 +93,10 @@ class TrainConfig(BaseConfig):
     # Paths for Conditional DDIM
     conditional_ddim_lmdb: str = 'datasets/eeg_ddim_ffhq.lmdb'
     conditional_ddim_checkpoint: str = None  # Path to pre-trained Conditional DDIM (if any)
+
+    # Limiting datasets to 10 samples for testing
+    max_train_samples: int = 10
+    max_val_samples: int = 10
 
     # Existing fields
     train_cond0_prob: float = 0
@@ -360,32 +384,47 @@ class TrainConfig(BaseConfig):
     def make_semantic_encoder_dataset(self):
         """
         Initialize the dataset for Semantic Encoder training.
+        Limits to `max_train_samples` for training and `max_val_samples` for validation.
         """
-        return EEGEncoderDataset(self.semantic_encoder_lmdb)
+        dataset = EEGEncoderDataset(self.semantic_encoder_lmdb)
+        if self.max_train_samples:
+            # Select the first `max_train_samples` samples for training
+            indices = list(range(min(self.max_train_samples, len(dataset))))
+            dataset = Subset(dataset, indices)
+        return dataset
 
     def make_conditional_ddim_dataset(self, split='train'):
         """
         Initialize the dataset for Conditional DDIM training.
+        Limits to `max_train_samples` for training and `max_val_samples` for validation.
         """
-        return ConditionalDDIMDataset(self.conditional_ddim_lmdb, split=split)
+        dataset = ConditionalDDIMDataset(self.conditional_ddim_lmdb, split=split)
+        if self.max_train_samples:
+            # Select the first `max_train_samples` samples for training
+            indices = list(range(min(self.max_train_samples, len(dataset))))
+            dataset = Subset(dataset, indices)
+        return dataset
 
     def make_model_conf(self):
         """
         Create model configuration based on the training mode.
         """
-        if self.train_mode == TrainMode.SEMANTIC_ENCODER:
+        if self.train_mode == TrainMode.semantic_encoder:
             # Configuration for Semantic Encoder
             return SemanticEncoderConfig(
-                # Define parameters specific to Semantic Encoder
                 embedding_dim=512,
-                # ... other configurations as needed
+                input_channels=3,  # Adjust based on your EEG data's channel count
+                hidden_layers=(256, 512),
+                activation=Activation.relu
             )
-        elif self.train_mode == TrainMode.CONDITIONAL_DDIM:
+        elif self.train_mode == TrainMode.conditional_ddim:
             # Configuration for Conditional DDIM
             return ConditionalDDIMConfig(
-                # Define parameters specific to Conditional DDIM
                 embedding_dim=512,
-                # ... other configurations as needed
+                img_size=self.img_size,
+                output_channels=3,
+                hidden_layers=(256, 512, 1024),
+                activation=Activation.relu
             )
         else:
             # Existing configurations for other modes
