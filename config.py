@@ -35,12 +35,10 @@ data_paths = {
     'celeba_relight': os.path.expanduser('datasets/celeba_hq_light/celeba_light.txt'),
 }
 
-
 @dataclass
 class PretrainConfig(BaseConfig):
     name: str
     path: str
-
 
 # Define separate configuration classes for Semantic Encoder and Conditional DDIM
 @dataclass
@@ -214,7 +212,7 @@ class TrainConfig(BaseConfig):
         self.data_val_name = self.data_val_name or self.data_name
 
         # Validation based on train_mode
-        if self.train_mode == TrainMode.CONDITIONAL_DDIM:
+        if self.train_mode == TrainMode.conditional_ddim:
             if not self.semantic_encoder_checkpoint:
                 raise ValueError("semantic_encoder_checkpoint must be provided for Conditional DDIM training.")
 
