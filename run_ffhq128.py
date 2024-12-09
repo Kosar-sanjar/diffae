@@ -12,7 +12,7 @@ def main():
     print("Step 1: Training the Autoencoder (Semantic Encoder)")
     gpus_encoder = [0, 1, 2, 3]  # Adjust based on available GPUs
     conf_encoder = ffhq128_autoenc_130M()
-    # conf_encoder.train_mode is already set in ffhq128_autoenc_130M()
+    # train_mode is already set within ffhq128_autoenc_130M()
     train(conf_encoder, gpus=gpus_encoder)
     
     # ---------------------------
@@ -21,7 +21,6 @@ def main():
     print("Step 2: Inferring Latents for Latent DPM Training")
     gpus_infer = [0, 1, 2, 3]  # Can utilize multiple GPUs for faster inference
     conf_infer = ffhq128_autoenc_130M()  # Use the same configuration as encoder
-    # conf_infer.train_mode is already set in ffhq128_autoenc_130M()
     conf_infer.eval_programs = ['infer']  # Specify the inference program
     train(conf_infer, gpus=gpus_infer, mode='eval')
     
@@ -31,7 +30,6 @@ def main():
     print("Step 3: Training the Latent DPM")
     gpus_latent = [0]  # Typically requires fewer resources
     conf_latent = ffhq128_autoenc_latent()  # Define a separate configuration for latent training
-    # conf_latent.train_mode is already set in ffhq128_autoenc_latent()
     train(conf_latent, gpus=gpus_latent)
     
     # ---------------------------
