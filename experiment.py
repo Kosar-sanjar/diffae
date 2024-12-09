@@ -26,9 +26,13 @@ from renderer import *
 
 
 class LitModel(pl.LightningModule):
+    # experiment.py
+
+class LitModel(pl.LightningModule):
     def __init__(self, conf: TrainConfig):
         super().__init__()
-        assert conf.train_mode != TrainMode.manipulate
+        assert conf.train_mode in TrainMode, "Invalid training mode specified."
+
         if conf.seed is not None:
             pl.seed_everything(conf.seed)
 
@@ -36,43 +40,74 @@ class LitModel(pl.LightningModule):
 
         self.conf = conf
 
-        self.model = conf.make_model_conf().make_model()
-        self.ema_model = copy.deepcopy(self.model)
+        if self.conf.train_mode == TrainMode.SEMANTIC_ENCODER:
+            # Initialize Semantic Encoder
+            self.model = conf.make_model_conf().make_model()  # Semantic Encoder
+            self.ema_model = copy.deepcopy(self.model)
+        elif self.conf.train_mode == TrainMode.CONDITIONAL_DDIM:
+            # Initialize Conditional DDIM
+            self.model = conf.make_model_conf().make_model()  # Conditional DDIM
+
+            # Load pre-trained Semantic Encoder
+            if self.conf.semantic_encoder_checkpoint is None:
+                raise ValueError("semantic_encoder_checkpoint must be provided for Conditional DDIM training.")
+            self.semantic_encoder = SemanticEncoder()
+            semantic_ckpt = torch.load(conf.semantic_encoder_checkpoint, map_location='cpu')
+            self.semantic_encoder.load_state_dict(semantic_ckpt['model_state_dict'], strict=True)
+            self.semantic_encoder.to(self.device)
+            self.semantic_encoder.eval()
+            for param in self.semantic_encoder.parameters():
+                param.requires_grad = False  # Freeze Semantic Encoder
+
+            # Initialize EMA model for Conditional DDIM
+            self.ema_model = copy.deepcopy(self.model)
+        else:
+            # Existing initialization for other training modes
+            self.model = conf.make_model_conf().make_model()
+            self.ema_model = copy.deepcopy(self.model)
+
         self.ema_model.requires_grad_(False)
         self.ema_model.eval()
 
+        # Model Size Calculation
         model_size = 0
         for param in self.model.parameters():
             model_size += param.data.nelement()
         print('Model params: %.2f M' % (model_size / 1024 / 1024))
 
-        self.sampler = conf.make_diffusion_conf().make_sampler()
-        self.eval_sampler = conf.make_eval_diffusion_conf().make_sampler()
+        # Initialize Samplers based on Training Mode
+        if self.conf.train_mode == TrainMode.CONDITIONAL_DDIM:
+            self.sampler = conf.make_conditional_diffusion_conf().make_sampler()
+            self.eval_sampler = conf.make_conditional_eval_diffusion_conf().make_sampler()
+        elif self.conf.train_mode == TrainMode.SEMANTIC_ENCODER:
+            self.sampler = conf.make_diffusion_conf().make_sampler()
+            self.eval_sampler = conf.make_eval_diffusion_conf().make_sampler()
+        else:
+            self.sampler = conf.make_diffusion_conf().make_sampler()
+            self.eval_sampler = conf.make_eval_diffusion_conf().make_sampler()
 
-        # this is shared for both model and latent
+        # Shared Sampler for Timesteps
         self.T_sampler = conf.make_T_sampler()
 
+        # Latent Samplers (if applicable)
         if conf.train_mode.use_latent_net():
-            self.latent_sampler = conf.make_latent_diffusion_conf(
-            ).make_sampler()
-            self.eval_latent_sampler = conf.make_latent_eval_diffusion_conf(
-            ).make_sampler()
+            self.latent_sampler = conf.make_latent_diffusion_conf().make_sampler()
+            self.eval_latent_sampler = conf.make_latent_eval_diffusion_conf().make_sampler()
         else:
             self.latent_sampler = None
             self.eval_latent_sampler = None
 
-        # initial variables for consistent sampling
-        self.register_buffer(
-            'x_T',
-            # torch.randn(conf.sample_size, 3, conf.img_size, conf.img_size))
-            torch.randn(conf.sample_size, 1, conf.img_size, conf.img_size))
+        # Initial Variables for Consistent Sampling
+        self.register_buffer('x_T', torch.randn(conf.sample_size, 3, conf.img_size, conf.img_size))
 
+        # Load Pretrained Model (if any)
         if conf.pretrain is not None:
             print(f'loading pretrain ... {conf.pretrain.name}')
             state = torch.load(conf.pretrain.path, map_location='cpu')
             print('step:', state['global_step'])
             self.load_state_dict(state['state_dict'], strict=False)
 
+        # Load Latent Inference Statistics (if any)
         if conf.latent_infer_path is not None:
             print('loading latent stats ...')
             state = torch.load(conf.latent_infer_path)
@@ -166,38 +201,53 @@ class LitModel(pl.LightningModule):
                                            x_start=x_start)
             return gen
 
-    def setup(self, stage=None) -> None:
-        """
-        make datasets & seeding each worker separately
-        """
-        ##############################################
-        # NEED TO SET THE SEED SEPARATELY HERE
-        if self.conf.seed is not None:
-            seed = self.conf.seed * get_world_size() + self.global_rank
-            np.random.seed(seed)
-            torch.manual_seed(seed)
-            torch.cuda.manual_seed(seed)
-            print('local seed:', seed)
-        ##############################################
-
+def setup(self, stage=None) -> None:
+    """
+    Initialize datasets based on the training mode.
+    """
+    if self.conf.train_mode == TrainMode.SEMANTIC_ENCODER:
+        # Load Semantic Encoder Dataset
+        self.train_data = self.conf.make_semantic_encoder_dataset()
+        print('Semantic Encoder train data:', len(self.train_data))
+        self.val_data = self.conf.make_semantic_encoder_dataset(split='val')
+        print('Semantic Encoder val data:', len(self.val_data))
+    elif self.conf.train_mode == TrainMode.CONDITIONAL_DDIM:
+        # Load Conditional DDIM Dataset
+        self.train_data = self.conf.make_conditional_ddim_dataset()
+        print('Conditional DDIM train data:', len(self.train_data))
+        self.val_data = self.conf.make_conditional_ddim_dataset(split='val')
+        print('Conditional DDIM val data:', len(self.val_data))
+    else:
+        # Existing dataset loading for other modes
         self.train_data = self.conf.make_dataset()
         print('train data:', len(self.train_data))
         self.val_data = self.train_data
         print('val data:', len(self.val_data))
 
-    def _train_dataloader(self, drop_last=True):
-        """
-        really make the dataloader
-        """
-        # make sure to use the fraction of batch size
-        # the batch size is global!
-        conf = self.conf.clone()
-        conf.batch_size = self.batch_size
 
-        dataloader = conf.make_loader(self.train_data,
-                                      shuffle=True,
-                                      drop_last=drop_last)
-        return dataloader
+def train_dataloader(self):
+    """
+    Return the appropriate dataloader based on the training mode.
+    """
+    print('on train dataloader start ...')
+    if self.conf.train_mode == TrainMode.CONDITIONAL_DDIM:
+        if self.conf.train_mode.require_dataset_infer():
+            if self.conds is None:
+                self.conds = self.infer_whole_dataset()
+                self.conds_mean.data = self.conds.float().mean(dim=0, keepdim=True)
+                self.conds_std.data = self.conds.float().std(dim=0, keepdim=True)
+            print('mean:', self.conds_mean.mean(), 'std:', self.conds_std.mean())
+            conf = self.conf.clone()
+            conf.batch_size = self.batch_size
+            data = TensorDataset(self.conds)
+            return conf.make_loader(data, shuffle=True)
+        else:
+            return self._train_dataloader()
+    elif self.conf.train_mode == TrainMode.SEMANTIC_ENCODER:
+        return self._train_dataloader()
+    else:
+        return self._train_dataloader()
+
 
     def train_dataloader(self):
         """
@@ -348,88 +398,71 @@ class LitModel(pl.LightningModule):
         conds = torch.cat(conds).float()
         return conds
 
-    def training_step(self, batch, batch_idx):
-        """
-        given an input, calculate the loss function
-        no optimization at this stage.
-        """
-        with amp.autocast(False):
-            # batch size here is local!
-            # forward
-            if self.conf.train_mode.require_dataset_infer():
-                # this mode as pre-calculated cond
-                cond = batch[0]
-                if self.conf.latent_znormalize:
-                    cond = (cond - self.conds_mean.to(
-                        self.device)) / self.conds_std.to(self.device)
-            else:
-                imgs, idxs = batch['img'], batch['index']
-                # print(f'(rank {self.global_rank}) batch size:', len(imgs))
-                x_start = imgs
+def training_step(self, batch, batch_idx):
+    """
+    Calculate the loss based on the training mode.
+    """
+    with amp.autocast(False):
+        if self.conf.train_mode == TrainMode.SEMANTIC_ENCODER:
+            # Training the Semantic Encoder
+            eeg_data = batch  # Shape: (batch_size, channels, time_steps)
+            embeddings = self.model(eeg_data.to(self.device))  # Forward pass
 
-            if self.conf.train_mode == TrainMode.diffusion:
-                """
-                main training mode!!!
-                """
-                # with numpy seed we have the problem that the sample t's are related!
-                t, weight = self.T_sampler.sample(len(x_start), x_start.device)
-                losses = self.sampler.training_losses(model=self.model,
-                                                      x_start=x_start,
-                                                      t=t)
-            elif self.conf.train_mode.is_latent_diffusion():
-                """
-                training the latent variables!
-                """
-                # diffusion on the latent
-                t, weight = self.T_sampler.sample(len(cond), cond.device)
-                latent_losses = self.latent_sampler.training_losses(
-                    model=self.model.latent_net, x_start=cond, t=t)
-                # train only do the latent diffusion
-                losses = {
-                    'latent': latent_losses['loss'],
-                    'loss': latent_losses['loss']
-                }
-            else:
-                raise NotImplementedError()
+            # Define your loss function.
+            # Example: Contrastive Loss, Autoencoder Loss, etc.
+            # Here, we'll use a dummy loss (MSE) for illustration. Replace with your actual loss.
+            targets = torch.zeros_like(embeddings).to(self.device)  # Replace with actual targets
+            loss = nn.MSELoss()(embeddings, targets)
+        
+        elif self.conf.train_mode == TrainMode.CONDITIONAL_DDIM:
+            # Training the Conditional DDIM
+            eeg_data, images, labels, subjects = batch
+            eeg_data = eeg_data.to(self.device)      # Shape: (batch_size, channels, time_steps)
+            images = images.to(self.device)          # Shape: (batch_size, 3, H, W)
+            
+            # Obtain embeddings from the pre-trained Semantic Encoder
+            with torch.no_grad():
+                embeddings = self.semantic_encoder(eeg_data)  # Shape: (batch_size, embedding_dim)
+            
+            # Forward pass through Conditional DDIM
+            generated_images = self.model(embeddings)  # Adjust based on your model's forward method
+            
+            # Define your loss function.
+            # Example: L1 Loss, L2 Loss, etc.
+            loss = nn.MSELoss()(generated_images, images)
+        
+        else:
+            raise NotImplementedError()
 
-            loss = losses['loss'].mean()
-            # divide by accum batches to make the accumulated gradient exact!
-            for key in ['loss', 'vae', 'latent', 'mmd', 'chamfer', 'arg_cnt']:
-                if key in losses:
-                    losses[key] = self.all_gather(losses[key]).mean()
+        # Logging losses
+        self.log('train_loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
+    
+    return loss
 
-            if self.global_rank == 0:
-                self.logger.experiment.add_scalar('loss', losses['loss'],
-                                                  self.num_samples)
-                for key in ['vae', 'latent', 'mmd', 'chamfer', 'arg_cnt']:
-                    if key in losses:
-                        self.logger.experiment.add_scalar(
-                            f'loss/{key}', losses[key], self.num_samples)
 
-        return {'loss': loss}
+def on_train_batch_end(self, outputs, batch, batch_idx: int, dataloader_idx: int) -> None:
+    """
+    After each training step ...
+    """
+    if self.is_last_accum(batch_idx):
+        if self.conf.train_mode == TrainMode.CONDITIONAL_DDIM:
+            # Update EMA for Conditional DDIM
+            ema(self.model, self.ema_model, self.conf.ema_decay)
+        elif self.conf.train_mode == TrainMode.SEMANTIC_ENCODER:
+            # Update EMA for Semantic Encoder
+            ema(self.model, self.ema_model, self.conf.ema_decay)
+        else:
+            # Existing EMA updates for other modes
+            ema(self.model, self.ema_model, self.conf.ema_decay)
 
-    def on_train_batch_end(self, outputs, batch, batch_idx: int,
-                           dataloader_idx: int) -> None:
-        """
-        after each training step ...
-        """
-        if self.is_last_accum(batch_idx):
-            # only apply ema on the last gradient accumulation step,
-            # if it is the iteration that has optimizer.step()
-            if self.conf.train_mode == TrainMode.latent_diffusion:
-                # it trains only the latent hence change only the latent
-                ema(self.model.latent_net, self.ema_model.latent_net,
-                    self.conf.ema_decay)
-            else:
-                ema(self.model, self.ema_model, self.conf.ema_decay)
+        # Logging
+        if self.conf.train_mode.require_dataset_infer():
+            imgs = None
+        else:
+            imgs = batch['img'] if self.conf.train_mode == TrainMode.CONDITIONAL_DDIM else batch
+        self.log_sample(x_start=imgs)
+        self.evaluate_scores()
 
-            # logging
-            if self.conf.train_mode.require_dataset_infer():
-                imgs = None
-            else:
-                imgs = batch['img']
-            self.log_sample(x_start=imgs)
-            self.evaluate_scores()
 
     def on_before_optimizer_step(self, optimizer: Optimizer,
                                  optimizer_idx: int) -> None:
@@ -632,27 +665,33 @@ class LitModel(pl.LightningModule):
             # lpips(self.ema_model, '_ema')
 
     def configure_optimizers(self):
-        out = {}
-        if self.conf.optimizer == OptimizerType.adam:
-            optim = torch.optim.Adam(self.model.parameters(),
+    """
+    Configure optimizers based on the training mode.
+    """
+    if self.conf.optimizer == OptimizerType.adam:
+        optimizer = torch.optim.Adam(self.model.parameters(),
                                      lr=self.conf.lr,
                                      weight_decay=self.conf.weight_decay)
-        elif self.conf.optimizer == OptimizerType.adamw:
-            optim = torch.optim.AdamW(self.model.parameters(),
+    elif self.conf.optimizer == OptimizerType.adamw:
+        optimizer = torch.optim.AdamW(self.model.parameters(),
                                       lr=self.conf.lr,
                                       weight_decay=self.conf.weight_decay)
-        else:
-            raise NotImplementedError()
-        out['optimizer'] = optim
-        if self.conf.warmup > 0:
-            sched = torch.optim.lr_scheduler.LambdaLR(optim,
-                                                      lr_lambda=WarmupLR(
-                                                          self.conf.warmup))
-            out['lr_scheduler'] = {
-                'scheduler': sched,
-                'interval': 'step',
-            }
-        return out
+    else:
+        raise NotImplementedError()
+    
+    optim_config = {
+        'optimizer': optimizer
+    }
+
+    if self.conf.warmup > 0:
+        sched = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=WarmupLR(self.conf.warmup))
+        optim_config['lr_scheduler'] = {
+            'scheduler': sched,
+            'interval': 'step',
+        }
+    
+    return optim_config
+
 
     def split_tensor(self, x):
         """
