@@ -1,3 +1,5 @@
+# experiment.py
+
 import copy
 import json
 import os
@@ -7,15 +9,10 @@ import numpy as np
 import pandas as pd
 import pytorch_lightning as pl
 import torch
-from numpy.lib.function_base import flip
-from pytorch_lightning import loggers as pl_loggers
-from pytorch_lightning.callbacks import *
-from torch import nn
-from torch.cuda import amp
-from torch.distributions import Categorical
-from torch.optim.optimizer import Optimizer
-from torch.utils.data.dataset import ConcatDataset, TensorDataset
+from tqdm import tqdm  # Ensure tqdm is imported for progress bars
+from torch.utils.data import DataLoader, TensorDataset, ConcatDataset, Subset
 from torchvision.utils import make_grid, save_image
+from contextlib import nullcontext
 
 from config import *
 from dataset import *
@@ -26,13 +23,9 @@ from renderer import *
 
 
 class LitModel(pl.LightningModule):
-    # experiment.py
-
-class LitModel(pl.LightningModule):
     def __init__(self, conf: TrainConfig):
         super().__init__()
-        assert conf.train_mode in TrainMode, "Invalid training mode specified."
-
+        assert conf.train_mode != TrainMode.manipulate
         if conf.seed is not None:
             pl.seed_everything(conf.seed)
 
@@ -40,109 +33,22 @@ class LitModel(pl.LightningModule):
 
         self.conf = conf
 
-        if self.conf.train_mode == TrainMode.SEMANTIC_ENCODER:
-            # Initialize Semantic Encoder
-            self.model = conf.make_model_conf().make_model()  # Semantic Encoder
-            self.ema_model = copy.deepcopy(self.model)
-        elif self.conf.train_mode == TrainMode.CONDITIONAL_DDIM:
-            # Initialize Conditional DDIM
-            self.model = conf.make_model_conf().make_model()  # Conditional DDIM
-
-            # Load pre-trained Semantic Encoder
-            if self.conf.semantic_encoder_checkpoint is None:
-                raise ValueError("semantic_encoder_checkpoint must be provided for Conditional DDIM training.")
-            self.semantic_encoder = SemanticEncoder()
-            semantic_ckpt = torch.load(conf.semantic_encoder_checkpoint, map_location='cpu')
-            self.semantic_encoder.load_state_dict(semantic_ckpt['model_state_dict'], strict=True)
-            self.semantic_encoder.to(self.device)
-            self.semantic_encoder.eval()
-            for param in self.semantic_encoder.parameters():
-                param.requires_grad = False  # Freeze Semantic Encoder
-
-            # Initialize EMA model for Conditional DDIM
-            self.ema_model = copy.deepcopy(self.model)
-        else:
-            # Existing initialization for other training modes
-            self.model = conf.make_model_conf().make_model()
-            self.ema_model = copy.deepcopy(self.model)
-
+        self.model = conf.make_model_conf().make_model()
+        self.ema_model = copy.deepcopy(self.model)
         self.ema_model.requires_grad_(False)
         self.ema_model.eval()
 
-        # Model Size Calculation
         model_size = 0
         for param in self.model.parameters():
             model_size += param.data.nelement()
         print('Model params: %.2f M' % (model_size / 1024 / 1024))
 
-        def make_model_conf(self):
-    """
-    Create model configuration based on the training mode.
-    """
-    if self.train_mode == TrainMode.SEMANTIC_ENCODER:
-        # Configuration for Semantic Encoder
-        return SemanticEncoderConfig(
-            embedding_dim=self.style_ch,  # Example parameter
-            # Add other Semantic Encoder specific configurations here
-        )
-    elif self.train_mode == TrainMode.CONDITIONAL_DDIM:
-        # Configuration for Conditional DDIM
-        return ConditionalDDIMConfig(
-            embedding_dim=self.style_ch,  # Example parameter
-            # Add other Conditional DDIM specific configurations here
-        )
-    else:
-        # Existing configurations for other training modes
-        if self.model_name == ModelName.beatgans_ddpm:
-            self.model_type = ModelType.ddpm
-            self.model_conf = BeatGANsUNetConfig(
-                attention_resolutions=self.net_attn,
-                channel_mult=self.net_ch_mult,
-                conv_resample=True,
-                dims=2,
-                dropout=self.dropout,
-                embed_channels=self.net_beatgans_embed_channels,
-                image_size=self.img_size,
-                in_channels=3,
-                model_channels=self.net_ch,
-                num_classes=None,
-                num_head_channels=-1,
-                num_heads_upsample=-1,
-                num_heads=self.net_beatgans_attn_head,
-                num_res_blocks=self.net_num_res_blocks,
-                num_input_res_blocks=self.net_num_input_res_blocks,
-                out_channels=self.model_out_channels,
-                resblock_updown=self.net_resblock_updown,
-                use_checkpoint=self.net_beatgans_gradient_checkpoint,
-                use_new_attention_order=False,
-                resnet_two_cond=self.net_beatgans_resnet_two_cond,
-                resnet_use_zero_module=self.net_beatgans_resnet_use_zero_module,
-            )
-        elif self.model_name in [ModelName.beatgans_autoenc]:
-            # Existing configurations for autoencoder models
-            # ...
-            pass
-        else:
-            raise NotImplementedError(self.model_name)
-    
-        return self.model_conf
+        self.sampler = conf.make_diffusion_conf().make_sampler()
+        self.eval_sampler = conf.make_eval_diffusion_conf().make_sampler()
 
-
-        # Initialize Samplers based on Training Mode
-        if self.conf.train_mode == TrainMode.CONDITIONAL_DDIM:
-            self.sampler = conf.make_conditional_diffusion_conf().make_sampler()
-            self.eval_sampler = conf.make_conditional_eval_diffusion_conf().make_sampler()
-        elif self.conf.train_mode == TrainMode.SEMANTIC_ENCODER:
-            self.sampler = conf.make_diffusion_conf().make_sampler()
-            self.eval_sampler = conf.make_eval_diffusion_conf().make_sampler()
-        else:
-            self.sampler = conf.make_diffusion_conf().make_sampler()
-            self.eval_sampler = conf.make_eval_diffusion_conf().make_sampler()
-
-        # Shared Sampler for Timesteps
+        # this is shared for both model and latent
         self.T_sampler = conf.make_T_sampler()
 
-        # Latent Samplers (if applicable)
         if conf.train_mode.use_latent_net():
             self.latent_sampler = conf.make_latent_diffusion_conf().make_sampler()
             self.eval_latent_sampler = conf.make_latent_eval_diffusion_conf().make_sampler()
@@ -150,17 +56,18 @@ class LitModel(pl.LightningModule):
             self.latent_sampler = None
             self.eval_latent_sampler = None
 
-        # Initial Variables for Consistent Sampling
-        self.register_buffer('x_T', torch.randn(conf.sample_size, 3, conf.img_size, conf.img_size))
+        # initial variables for consistent sampling
+        self.register_buffer(
+            'x_T',
+            torch.randn(conf.sample_size, 3, conf.img_size, conf.img_size)
+        )
 
-        # Load Pretrained Model (if any)
         if conf.pretrain is not None:
             print(f'loading pretrain ... {conf.pretrain.name}')
             state = torch.load(conf.pretrain.path, map_location='cpu')
             print('step:', state['global_step'])
             self.load_state_dict(state['state_dict'], strict=False)
 
-        # Load Latent Inference Statistics (if any)
         if conf.latent_infer_path is not None:
             print('loading latent stats ...')
             state = torch.load(conf.latent_infer_path)
@@ -172,13 +79,11 @@ class LitModel(pl.LightningModule):
             self.conds_std = None
 
     def normalize(self, cond):
-        cond = (cond - self.conds_mean.to(self.device)) / self.conds_std.to(
-            self.device)
+        cond = (cond - self.conds_mean.to(self.device)) / self.conds_std.to(self.device)
         return cond
 
     def denormalize(self, cond):
-        cond = (cond * self.conds_std.to(self.device)) + self.conds_mean.to(
-            self.device)
+        cond = (cond * self.conds_std.to(self.device)) + self.conds_mean.to(self.device)
         return cond
 
     def sample(self, N, device, T=None, T_latent=None):
@@ -189,11 +94,7 @@ class LitModel(pl.LightningModule):
             sampler = self.conf._make_diffusion_conf(T).make_sampler()
             latent_sampler = self.conf._make_latent_diffusion_conf(T_latent).make_sampler()
 
-        noise = torch.randn(N,
-                            3,
-                            self.conf.img_size,
-                            self.conf.img_size,
-                            device=device)
+        noise = torch.randn(N, 3, self.conf.img_size, self.conf.img_size, device=device)
         pred_img = render_uncondition(
             self.conf,
             self.ema_model,
@@ -213,17 +114,9 @@ class LitModel(pl.LightningModule):
             sampler = self.conf._make_diffusion_conf(T).make_sampler()
 
         if cond is not None:
-            pred_img = render_condition(self.conf,
-                                        self.ema_model,
-                                        noise,
-                                        sampler=sampler,
-                                        cond=cond)
+            pred_img = render_condition(self.conf, self.ema_model, noise, sampler=sampler, cond=cond)
         else:
-            pred_img = render_uncondition(self.conf,
-                                          self.ema_model,
-                                          noise,
-                                          sampler=sampler,
-                                          latent_sampler=None)
+            pred_img = render_uncondition(self.conf, self.ema_model, noise, sampler=sampler, latent_sampler=None)
         pred_img = (pred_img + 1) / 2
         return pred_img
 
@@ -238,91 +131,71 @@ class LitModel(pl.LightningModule):
             sampler = self.eval_sampler
         else:
             sampler = self.conf._make_diffusion_conf(T).make_sampler()
-        out = sampler.ddim_reverse_sample_loop(self.ema_model,
-                                               x,
-                                               model_kwargs={'cond': cond})
+        out = sampler.ddim_reverse_sample_loop(self.ema_model, x, model_kwargs={'cond': cond})
         return out['sample']
 
     def forward(self, noise=None, x_start=None, ema_model: bool = False):
-        with amp.autocast(False):
+        with torch.cuda.amp.autocast(False):
             if ema_model:
                 model = self.ema_model
             else:
                 model = self.model
-            gen = self.eval_sampler.sample(model=model,
-                                           noise=noise,
-                                           x_start=x_start)
+            gen = self.eval_sampler.sample(model=model, noise=noise, x_start=x_start)
             return gen
 
-def setup(self, stage=None) -> None:
-    """
-    Initialize datasets based on the training mode.
-    """
-    if self.conf.train_mode == TrainMode.SEMANTIC_ENCODER:
-        # Load Semantic Encoder Dataset
-        self.train_data = self.conf.make_semantic_encoder_dataset()
-        print('Semantic Encoder train data:', len(self.train_data))
-        self.val_data = self.conf.make_semantic_encoder_dataset(split='val')
-        print('Semantic Encoder val data:', len(self.val_data))
-    elif self.conf.train_mode == TrainMode.CONDITIONAL_DDIM:
-        # Load Conditional DDIM Dataset
-        self.train_data = self.conf.make_conditional_ddim_dataset()
-        print('Conditional DDIM train data:', len(self.train_data))
-        self.val_data = self.conf.make_conditional_ddim_dataset(split='val')
-        print('Conditional DDIM val data:', len(self.val_data))
-    else:
-        # Existing dataset loading for other modes
-        self.train_data = self.conf.make_dataset()
+    def setup(self, stage=None) -> None:
+        """
+        Make datasets & seed each worker separately
+        """
+        ##############################################
+        # NEED TO SET THE SEED SEPARATELY HERE
+        if self.conf.seed is not None:
+            seed = self.conf.seed * get_world_size() + self.global_rank
+            np.random.seed(seed)
+            torch.manual_seed(seed)
+            torch.cuda.manual_seed(seed)
+            print('local seed:', seed)
+        ##############################################
+
+        # Initialize datasets based on training mode
+        if self.conf.train_mode == TrainMode.semantic_encoder:
+            self.train_data = self.conf.make_semantic_encoder_dataset(split='train')
+            self.val_data = self.conf.make_semantic_encoder_dataset(split='val')
+        elif self.conf.train_mode == TrainMode.conditional_ddim:
+            self.train_data = self.conf.make_conditional_ddim_dataset(split='train')
+            self.val_data = self.conf.make_conditional_ddim_dataset(split='val')
+        else:
+            self.train_data = self.conf.make_dataset(split='train')
+            self.val_data = self.conf.make_dataset(split='val')
+
         print('train data:', len(self.train_data))
-        self.val_data = self.train_data
         print('val data:', len(self.val_data))
 
+    def _train_dataloader(self, drop_last=True):
+        """
+        Really make the dataloader
+        """
+        conf = self.conf.clone()
+        conf.batch_size = self.batch_size
 
-def train_dataloader(self):
-    """
-    Return the appropriate dataloader based on the training mode.
-    """
-    print('on train dataloader start ...')
-    if self.conf.train_mode == TrainMode.CONDITIONAL_DDIM:
-        if self.conf.train_mode.require_dataset_infer():
-            if self.conds is None:
-                self.conds = self.infer_whole_dataset()
-                self.conds_mean.data = self.conds.float().mean(dim=0, keepdim=True)
-                self.conds_std.data = self.conds.float().std(dim=0, keepdim=True)
-            print('mean:', self.conds_mean.mean(), 'std:', self.conds_std.mean())
-            conf = self.conf.clone()
-            conf.batch_size = self.batch_size
-            data = TensorDataset(self.conds)
-            return conf.make_loader(data, shuffle=True)
-        else:
-            return self._train_dataloader()
-    elif self.conf.train_mode == TrainMode.SEMANTIC_ENCODER:
-        return self._train_dataloader()
-    else:
-        return self._train_dataloader()
-
+        dataloader = conf.make_loader(self.train_data, shuffle=True, drop_last=drop_last)
+        return dataloader
 
     def train_dataloader(self):
         """
-        return the dataloader, if diffusion mode => return image dataset
-        if latent mode => return the inferred latent dataset
+        Return the dataloader based on the training mode.
         """
         print('on train dataloader start ...')
         if self.conf.train_mode.require_dataset_infer():
-            if self.conds is None:
-                # usually we load self.conds from a file
-                # so we do not need to do this again!
+            if self.conf.conds is None:
+                # Infer conditions (e.g., latent variables)
                 self.conds = self.infer_whole_dataset()
-                # need to use float32! unless the mean & std will be off!
-                # (1, c)
-                self.conds_mean.data = self.conds.float().mean(dim=0,
-                                                               keepdim=True)
-                self.conds_std.data = self.conds.float().std(dim=0,
-                                                             keepdim=True)
-            print('mean:', self.conds_mean.mean(), 'std:',
-                  self.conds_std.mean())
+                # Calculate mean and std
+                self.conds_mean.data = self.conds.float().mean(dim=0, keepdim=True)
+                self.conds_std.data = self.conds.float().std(dim=0, keepdim=True)
+            print('mean:', self.conds_mean.mean(), 'std:', self.conds_std.mean())
 
-            # return the dataset with pre-calculated conds
+            # Return the dataset with pre-calculated conditions
             conf = self.conf.clone()
             conf.batch_size = self.batch_size
             data = TensorDataset(self.conds)
@@ -333,50 +206,43 @@ def train_dataloader(self):
     @property
     def batch_size(self):
         """
-        local batch size for each worker
+        Local batch size for each worker
         """
         ws = get_world_size()
-        assert self.conf.batch_size % ws == 0
+        assert self.conf.batch_size % ws == 0, "Batch size must be divisible by world size."
         return self.conf.batch_size // ws
 
     @property
     def num_samples(self):
         """
-        (global) batch size * iterations
+        (Global) batch size * iterations
         """
-        # batch size here is global!
+        # Batch size here is global!
         # global_step already takes into account the accum batches
         return self.global_step * self.conf.batch_size_effective
 
     def is_last_accum(self, batch_idx):
         """
-        is it the last gradient accumulation loop? 
-        used with gradient_accum > 1 and to see if the optimizer will perform "step" in this iteration or not
+        Is it the last gradient accumulation loop?
+        Used with gradient_accum > 1 and to see if the optimizer will perform "step" in this iteration or not
         """
         return (batch_idx + 1) % self.conf.accum_batches == 0
 
-    def infer_whole_dataset(self,
-                            with_render=False,
-                            T_render=None,
-                            render_save_path=None):
+    def infer_whole_dataset(self, with_render=False, T_render=None, render_save_path=None):
         """
-        predicting the latents given images using the encoder
+        Predicting the latents given images using the encoder
 
         Args:
-            both_flips: include both original and flipped images; no need, it's not an improvement
-            with_render: whether to also render the images corresponding to that latent
-            render_save_path: lmdb output for the rendered images
+            with_render: Whether to also render the images corresponding to that latent
+            T_render: Number of timesteps for rendering
+            render_save_path: LMDB output for the rendered images
         """
-        data = self.conf.make_dataset()
+        data = self.conf.make_dataset(split='train')
         if isinstance(data, CelebAlmdb) and data.crop_d2c:
-            # special case where we need the d2c crop
-            data.transform = make_transform(self.conf.img_size,
-                                            flip_prob=0,
-                                            crop_d2c=True)
+            # Special case where we need the d2c crop
+            data.transform = make_transform(self.conf.img_size, flip_prob=0, crop_d2c=True)
         else:
             data.transform = make_transform(self.conf.img_size, flip_prob=0)
-
-        # data = SubsetDataset(data, 21)
 
         loader = self.conf.make_loader(
             data,
@@ -390,13 +256,10 @@ def train_dataloader(self):
         conds = []
 
         if with_render:
-            sampler = self.conf._make_diffusion_conf(
-                T=T_render or self.conf.T_eval).make_sampler()
+            sampler = self.conf._make_diffusion_conf(T=T_render or self.conf.T_eval).make_sampler()
 
             if self.global_rank == 0:
-                writer = LMDBImageWriter(render_save_path,
-                                         format='webp',
-                                         quality=100)
+                writer = LMDBImageWriter(render_save_path, format='webp', quality=100)
             else:
                 writer = nullcontext()
         else:
@@ -405,11 +268,11 @@ def train_dataloader(self):
         with writer:
             for batch in tqdm(loader, total=len(loader), desc='infer'):
                 with torch.no_grad():
-                    # (n, c)
-                    # print('idx:', batch['index'])
-                    cond = model.encoder(batch['img'].to(self.device))
+                    # Assuming batch is a dictionary with 'img' key
+                    imgs = batch['img'].to(self.device)
+                    cond = model.encoder(imgs)
 
-                    # used for reordering to match the original dataset
+                    # Used for reordering to match the original dataset
                     idx = batch['index']
                     idx = self.all_gather(idx)
                     if idx.dim() == 2:
@@ -417,21 +280,14 @@ def train_dataloader(self):
                     argsort = idx.argsort()
 
                     if with_render:
-                        noise = torch.randn(len(cond),
-                                            3,
-                                            self.conf.img_size,
-                                            self.conf.img_size,
-                                            device=self.device)
-                        render = sampler.sample(model, noise=noise, cond=cond)
+                        noise = torch.randn(len(cond), 3, self.conf.img_size, self.conf.img_size, device=self.device)
+                        render = sampler.sample(model=model, noise=noise, cond=cond)
                         render = (render + 1) / 2
-                        # print('render:', render.shape)
                         # (k, n, c, h, w)
                         render = self.all_gather(render)
                         if render.dim() == 5:
                             # (k*n, c)
                             render = render.flatten(0, 1)
-
-                        # print('global_rank:', self.global_rank)
 
                         if self.global_rank == 0:
                             writer.put_images(render[argsort])
@@ -444,6 +300,7 @@ def train_dataloader(self):
                         cond = cond.flatten(0, 1)
 
                     conds.append(cond[argsort].cpu())
+                # Optional: break for debugging
                 # break
         model.train()
         # (N, c) cpu
@@ -451,101 +308,95 @@ def train_dataloader(self):
         conds = torch.cat(conds).float()
         return conds
 
-def training_step(self, batch, batch_idx):
-    """
-    Calculate the loss based on the training mode.
-    """
-    with amp.autocast(False):
-        if self.conf.train_mode == TrainMode.SEMANTIC_ENCODER:
-            # Training the Semantic Encoder
-            eeg_data = batch  # Shape: (batch_size, channels, time_steps)
-            embeddings = self.model(eeg_data.to(self.device))  # Forward pass
+    def training_step(self, batch, batch_idx):
+        """
+        Given an input, calculate the loss function
+        No optimization at this stage.
+        """
+        with torch.cuda.amp.autocast(False):
+            # Batch size here is local!
+            if self.conf.train_mode.require_dataset_infer():
+                # This mode uses pre-calculated conditions
+                cond = batch[0]
+                if self.conf.latent_znormalize:
+                    cond = (cond - self.conds_mean.to(self.device)) / self.conds_std.to(self.device)
+            else:
+                imgs, idxs = batch['img'], batch['index']
+                x_start = imgs
 
-            # Define your loss function.
-            # Example: Contrastive Loss, Autoencoder Loss, etc.
-            # Here, we'll use a dummy loss (MSE) for illustration. Replace with your actual loss.
-            targets = torch.zeros_like(embeddings).to(self.device)  # Replace with actual targets
-            loss = nn.MSELoss()(embeddings, targets)
-        
-        elif self.conf.train_mode == TrainMode.CONDITIONAL_DDIM:
-            # Training the Conditional DDIM
-            eeg_data, images, labels, subjects = batch
-            eeg_data = eeg_data.to(self.device)      # Shape: (batch_size, channels, time_steps)
-            images = images.to(self.device)          # Shape: (batch_size, 3, H, W)
-            
-            # Obtain embeddings from the pre-trained Semantic Encoder
-            with torch.no_grad():
-                embeddings = self.semantic_encoder(eeg_data)  # Shape: (batch_size, embedding_dim)
-            
-            # Forward pass through Conditional DDIM
-            generated_images = self.model(embeddings)  # Adjust based on your model's forward method
-            
-            # Define your loss function.
-            # Example: L1 Loss, L2 Loss, etc.
-            loss = nn.MSELoss()(generated_images, images)
-        
-        else:
-            raise NotImplementedError()
+            if self.conf.train_mode == TrainMode.diffusion:
+                """
+                Main training mode!!!
+                """
+                t, weight = self.T_sampler.sample(len(x_start), x_start.device)
+                losses = self.sampler.training_losses(model=self.model, x_start=x_start, t=t)
+            elif self.conf.train_mode.is_latent_diffusion():
+                """
+                Training the latent variables!
+                """
+                # Diffusion on the latent
+                t, weight = self.T_sampler.sample(len(cond), cond.device)
+                latent_losses = self.latent_sampler.training_losses(model=self.model.latent_net, x_start=cond, t=t)
+                # Train only the latent diffusion
+                losses = {
+                    'latent': latent_losses['loss'],
+                    'loss': latent_losses['loss']
+                }
+            else:
+                raise NotImplementedError()
 
-        # Logging losses
-        self.log('train_loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
-    
-    return loss
+            loss = losses['loss'].mean()
+            # Divide by accum batches to make the accumulated gradient exact!
+            for key in ['loss', 'vae', 'latent', 'mmd', 'chamfer', 'arg_cnt']:
+                if key in losses:
+                    losses[key] = self.all_gather(losses[key]).mean()
 
+            if self.global_rank == 0:
+                self.logger.experiment.add_scalar('loss', losses['loss'], self.num_samples)
+                for key in ['vae', 'latent', 'mmd', 'chamfer', 'arg_cnt']:
+                    if key in losses:
+                        self.logger.experiment.add_scalar(f'loss/{key}', losses[key], self.num_samples)
 
-def on_train_batch_end(self, outputs, batch, batch_idx: int, dataloader_idx: int) -> None:
-    """
-    After each training step ...
-    """
-    if self.is_last_accum(batch_idx):
-        if self.conf.train_mode == TrainMode.CONDITIONAL_DDIM:
-            # Update EMA for Conditional DDIM
-            ema(self.model, self.ema_model, self.conf.ema_decay)
-        elif self.conf.train_mode == TrainMode.SEMANTIC_ENCODER:
-            # Update EMA for Semantic Encoder
-            ema(self.model, self.ema_model, self.conf.ema_decay)
-        else:
-            # Existing EMA updates for other modes
-            ema(self.model, self.ema_model, self.conf.ema_decay)
+        return {'loss': loss}
 
-        # Logging
-        if self.conf.train_mode.require_dataset_infer():
-            imgs = None
-        else:
-            imgs = batch['img'] if self.conf.train_mode == TrainMode.CONDITIONAL_DDIM else batch
-        self.log_sample(x_start=imgs)
-        self.evaluate_scores()
+    def on_train_batch_end(self, outputs, batch, batch_idx: int, dataloader_idx: int) -> None:
+        """
+        After each training step ...
+        """
+        if self.is_last_accum(batch_idx):
+            # Only apply EMA on the last gradient accumulation step,
+            # if it is the iteration that has optimizer.step()
+            if self.conf.train_mode == TrainMode.latent_diffusion:
+                # It trains only the latent hence change only the latent
+                ema(self.model.latent_net, self.ema_model.latent_net, self.conf.ema_decay)
+            else:
+                ema(self.model, self.ema_model, self.conf.ema_decay)
 
+            # Logging
+            if self.conf.train_mode.require_dataset_infer():
+                imgs = None
+            else:
+                imgs = batch['img']
+            self.log_sample(x_start=imgs)
+            self.evaluate_scores()
 
-    def on_before_optimizer_step(self, optimizer: Optimizer,
-                                 optimizer_idx: int) -> None:
-        # fix the fp16 + clip grad norm problem with pytorch lightinng
-        # this is the currently correct way to do it
+    def on_before_optimizer_step(self, optimizer: torch.optim.Optimizer, optimizer_idx: int) -> None:
+        # Fix the fp16 + clip grad norm problem with PyTorch Lightning
+        # This is the currently correct way to do it
         if self.conf.grad_clip > 0:
-            # from trainer.params_grads import grads_norm, iter_opt_params
-            params = [
-                p for group in optimizer.param_groups for p in group['params']
-            ]
-            # print('before:', grads_norm(iter_opt_params(optimizer)))
-            torch.nn.utils.clip_grad_norm_(params,
-                                           max_norm=self.conf.grad_clip)
-            # print('after:', grads_norm(iter_opt_params(optimizer)))
+            params = [p for group in optimizer.param_groups for p in group['params']]
+            torch.nn.utils.clip_grad_norm_(params, max_norm=self.conf.grad_clip)
 
     def log_sample(self, x_start):
         """
-        put images to the tensorboard
+        Put images to the TensorBoard
         """
-        def do(model,
-               postfix,
-               use_xstart,
-               save_real=False,
-               no_latent_diff=False,
-               interpolate=False):
+        def do(model, postfix, use_xstart, save_real=False, no_latent_diff=False, interpolate=False):
             model.eval()
             with torch.no_grad():
                 all_x_T = self.split_tensor(self.x_T)
                 batch_size = min(len(all_x_T), self.conf.batch_size_eval)
-                # allow for superlarge models
+                # Allow for superlarge models
                 loader = DataLoader(all_x_T, batch_size=batch_size)
 
                 Gen = []
@@ -555,9 +406,8 @@ def on_train_batch_end(self, outputs, batch, batch_idx: int, dataloader_idx: int
                     else:
                         _xstart = None
 
-                    if self.conf.train_mode.is_latent_diffusion(
-                    ) and not use_xstart:
-                        # diffusion of the latent first
+                    if self.conf.train_mode.is_latent_diffusion() and not use_xstart:
+                        # Diffusion of the latent first
                         gen = render_uncondition(
                             conf=self.conf,
                             model=model,
@@ -565,28 +415,23 @@ def on_train_batch_end(self, outputs, batch, batch_idx: int, dataloader_idx: int
                             sampler=self.eval_sampler,
                             latent_sampler=self.eval_latent_sampler,
                             conds_mean=self.conds_mean,
-                            conds_std=self.conds_std)
+                            conds_std=self.conds_std
+                        )
                     else:
-                        if not use_xstart and self.conf.model_type.has_noise_to_cond(
-                        ):
+                        if not use_xstart and self.conf.model_type.has_noise_to_cond():
                             model: BeatGANsAutoencModel
-                            # special case, it may not be stochastic, yet can sample
-                            cond = torch.randn(len(x_T),
-                                               self.conf.style_ch,
-                                               device=self.device)
+                            # Special case, it may not be stochastic, yet can sample
+                            cond = torch.randn(len(x_T), self.conf.style_ch, device=self.device)
                             cond = model.noise_to_cond(cond)
                         else:
                             if interpolate:
-                                with amp.autocast(self.conf.fp16):
+                                with torch.cuda.amp.autocast(self.conf.fp16):
                                     cond = model.encoder(_xstart)
                                     i = torch.randperm(len(cond))
                                     cond = (cond + cond[i]) / 2
                             else:
                                 cond = None
-                        gen = self.eval_sampler.sample(model=model,
-                                                       noise=x_T,
-                                                       cond=cond,
-                                                       x_start=_xstart)
+                        gen = self.eval_sampler.sample(model=model, noise=x_T, cond=cond, x_start=_xstart)
                     Gen.append(gen)
 
                 gen = torch.cat(Gen)
@@ -596,90 +441,71 @@ def on_train_batch_end(self, outputs, batch, batch_idx: int, dataloader_idx: int
                     gen = gen.flatten(0, 1)
 
                 if save_real and use_xstart:
-                    # save the original images to the tensorboard
+                    # Save the original images to the TensorBoard
                     real = self.all_gather(_xstart)
                     if real.dim() == 5:
                         real = real.flatten(0, 1)
 
                     if self.global_rank == 0:
                         grid_real = (make_grid(real) + 1) / 2
-                        self.logger.experiment.add_image(
-                            f'sample{postfix}/real', grid_real,
-                            self.num_samples)
+                        self.logger.experiment.add_image(f'sample{postfix}/real', grid_real, self.num_samples)
 
                 if self.global_rank == 0:
-                    # save samples to the tensorboard
+                    # Save samples to the TensorBoard
                     grid = (make_grid(gen) + 1) / 2
-                    sample_dir = os.path.join(self.conf.logdir,
-                                              f'sample{postfix}')
+                    sample_dir = os.path.join(self.conf.logdir, f'sample{postfix}')
                     if not os.path.exists(sample_dir):
                         os.makedirs(sample_dir)
-                    path = os.path.join(sample_dir,
-                                        '%d.png' % self.num_samples)
+                    path = os.path.join(sample_dir, f'{self.num_samples}.png')
                     save_image(grid, path)
-                    self.logger.experiment.add_image(f'sample{postfix}', grid,
-                                                     self.num_samples)
+                    self.logger.experiment.add_image(f'sample{postfix}', grid, self.num_samples)
             model.train()
 
-        if self.conf.sample_every_samples > 0 and is_time(
-                self.num_samples, self.conf.sample_every_samples,
-                self.conf.batch_size_effective):
-
+        if self.conf.sample_every_samples > 0 and is_time(self.num_samples, self.conf.sample_every_samples, self.conf.batch_size_effective):
             if self.conf.train_mode.require_dataset_infer():
                 do(self.model, '', use_xstart=False)
                 do(self.ema_model, '_ema', use_xstart=False)
             else:
-                if self.conf.model_type.has_autoenc(
-                ) and self.conf.model_type.can_sample():
+                if self.conf.model_type.has_autoenc() and self.conf.model_type.can_sample():
                     do(self.model, '', use_xstart=False)
                     do(self.ema_model, '_ema', use_xstart=False)
-                    # autoencoding mode
+                    # Autoencoding mode
                     do(self.model, '_enc', use_xstart=True, save_real=True)
-                    do(self.ema_model,
-                       '_enc_ema',
-                       use_xstart=True,
-                       save_real=True)
+                    do(self.ema_model, '_enc_ema', use_xstart=True, save_real=True)
                 elif self.conf.train_mode.use_latent_net():
                     do(self.model, '', use_xstart=False)
                     do(self.ema_model, '_ema', use_xstart=False)
-                    # autoencoding mode
+                    # Autoencoding mode
                     do(self.model, '_enc', use_xstart=True, save_real=True)
-                    do(self.model,
-                       '_enc_nodiff',
-                       use_xstart=True,
-                       save_real=True,
-                       no_latent_diff=True)
-                    do(self.ema_model,
-                       '_enc_ema',
-                       use_xstart=True,
-                       save_real=True)
+                    do(self.model, '_enc_nodiff', use_xstart=True, save_real=True, no_latent_diff=True)
+                    do(self.ema_model, '_enc_ema', use_xstart=True, save_real=True)
                 else:
                     do(self.model, '', use_xstart=True, save_real=True)
                     do(self.ema_model, '_ema', use_xstart=True, save_real=True)
 
     def evaluate_scores(self):
         """
-        evaluate FID and other scores during training (put to the tensorboard)
-        For, FID. It is a fast version with 5k images (gold standard is 50k).
+        Evaluate FID and other scores during training (put to the TensorBoard)
+        For FID: It is a fast version with 5k images (gold standard is 50k).
         Don't use its results in the paper!
         """
         def fid(model, postfix):
-            score = evaluate_fid(self.eval_sampler,
-                                 model,
-                                 self.conf,
-                                 device=self.device,
-                                 train_data=self.train_data,
-                                 val_data=self.val_data,
-                                 latent_sampler=self.eval_latent_sampler,
-                                 conds_mean=self.conds_mean,
-                                 conds_std=self.conds_std)
+            score = evaluate_fid(
+                self.eval_sampler,
+                model,
+                self.conf,
+                device=self.device,
+                train_data=self.train_data,
+                val_data=self.val_data,
+                latent_sampler=self.eval_latent_sampler,
+                conds_mean=self.conds_mean,
+                conds_std=self.conds_std
+            )
             if self.global_rank == 0:
-                self.logger.experiment.add_scalar(f'FID{postfix}', score,
-                                                  self.num_samples)
+                self.logger.experiment.add_scalar(f'FID{postfix}', score, self.num_samples)
                 if not os.path.exists(self.conf.logdir):
                     os.makedirs(self.conf.logdir)
-                with open(os.path.join(self.conf.logdir, 'eval.txt'),
-                          'a') as f:
+                with open(os.path.join(self.conf.logdir, 'eval.txt'), 'a') as f:
                     metrics = {
                         f'FID{postfix}': score,
                         'num_samples': self.num_samples,
@@ -687,68 +513,52 @@ def on_train_batch_end(self, outputs, batch, batch_idx: int, dataloader_idx: int
                     f.write(json.dumps(metrics) + "\n")
 
         def lpips(model, postfix):
-            if self.conf.model_type.has_autoenc(
-            ) and self.conf.train_mode.is_autoenc():
+            if self.conf.model_type.has_autoenc() and self.conf.train_mode.is_autoenc():
                 # {'lpips', 'ssim', 'mse'}
-                score = evaluate_lpips(self.eval_sampler,
-                                       model,
-                                       self.conf,
-                                       device=self.device,
-                                       val_data=self.val_data,
-                                       latent_sampler=self.eval_latent_sampler)
+                score = evaluate_lpips(
+                    self.eval_sampler,
+                    model,
+                    self.conf,
+                    device=self.device,
+                    val_data=self.val_data,
+                    latent_sampler=self.eval_latent_sampler
+                )
 
                 if self.global_rank == 0:
                     for key, val in score.items():
-                        self.logger.experiment.add_scalar(
-                            f'{key}{postfix}', val, self.num_samples)
+                        self.logger.experiment.add_scalar(f'{key}{postfix}', val, self.num_samples)
 
-        if self.conf.eval_every_samples > 0 and self.num_samples > 0 and is_time(
-                self.num_samples, self.conf.eval_every_samples,
-                self.conf.batch_size_effective):
+        if self.conf.eval_every_samples > 0 and self.num_samples > 0 and is_time(self.num_samples, self.conf.eval_every_samples, self.conf.batch_size_effective):
             print(f'eval fid @ {self.num_samples}')
             lpips(self.model, '')
             fid(self.model, '')
 
-        if self.conf.eval_ema_every_samples > 0 and self.num_samples > 0 and is_time(
-                self.num_samples, self.conf.eval_ema_every_samples,
-                self.conf.batch_size_effective):
+        if self.conf.eval_ema_every_samples > 0 and self.num_samples > 0 and is_time(self.num_samples, self.conf.eval_ema_every_samples, self.conf.batch_size_effective):
             print(f'eval fid ema @ {self.num_samples}')
             fid(self.ema_model, '_ema')
-            # it's too slow
+            # It's too slow
             # lpips(self.ema_model, '_ema')
 
     def configure_optimizers(self):
-    """
-    Configure optimizers based on the training mode.
-    """
-    if self.conf.optimizer == OptimizerType.adam:
-        optimizer = torch.optim.Adam(self.model.parameters(),
-                                     lr=self.conf.lr,
-                                     weight_decay=self.conf.weight_decay)
-    elif self.conf.optimizer == OptimizerType.adamw:
-        optimizer = torch.optim.AdamW(self.model.parameters(),
-                                      lr=self.conf.lr,
-                                      weight_decay=self.conf.weight_decay)
-    else:
-        raise NotImplementedError()
-    
-    optim_config = {
-        'optimizer': optimizer
-    }
-
-    if self.conf.warmup > 0:
-        sched = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=WarmupLR(self.conf.warmup))
-        optim_config['lr_scheduler'] = {
-            'scheduler': sched,
-            'interval': 'step',
-        }
-    
-    return optim_config
-
+        out = {}
+        if self.conf.optimizer == OptimizerType.adam:
+            optim = torch.optim.Adam(self.model.parameters(), lr=self.conf.lr, weight_decay=self.conf.weight_decay)
+        elif self.conf.optimizer == OptimizerType.adamw:
+            optim = torch.optim.AdamW(self.model.parameters(), lr=self.conf.lr, weight_decay=self.conf.weight_decay)
+        else:
+            raise NotImplementedError()
+        out['optimizer'] = optim
+        if self.conf.warmup > 0:
+            sched = torch.optim.lr_scheduler.LambdaLR(optim, lr_lambda=WarmupLR(self.conf.warmup))
+            out['lr_scheduler'] = {
+                'scheduler': sched,
+                'interval': 'step',
+            }
+        return out
 
     def split_tensor(self, x):
         """
-        extract the tensor for a corresponding "worker" in the batch dimension
+        Extract the tensor for a corresponding "worker" in the batch dimension
 
         Args:
             x: (n, c)
@@ -764,28 +574,25 @@ def on_train_batch_end(self, outputs, batch, batch_idx: int, dataloader_idx: int
 
     def test_step(self, batch, *args, **kwargs):
         """
-        for the "eval" mode. 
-        We first select what to do according to the "conf.eval_programs". 
+        For the "eval" mode.
+        We first select what to do according to the "conf.eval_programs".
         test_step will only run for "one iteration" (it's a hack!).
         
-        We just want the multi-gpu support. 
+        We just want the multi-GPU support.
         """
-        # make sure you seed each worker differently!
+        # Make sure you seed each worker differently!
         self.setup()
 
-        # it will run only one step!
+        # It will run only one step!
         print('global step:', self.global_step)
         """
         "infer" = predict the latent variables using the encoder on the whole dataset
         """
         if 'infer' in self.conf.eval_programs:
-            if 'infer' in self.conf.eval_programs:
-                print('infer ...')
-                conds = self.infer_whole_dataset().float()
-                # NOTE: always use this path for the latent.pkl files
-                save_path = f'checkpoints/{self.conf.name}/latent.pkl'
-            else:
-                raise NotImplementedError()
+            print('infer ...')
+            conds = self.infer_whole_dataset().float()
+            # NOTE: always use this path for the latent.pkl files
+            save_path = f'checkpoints/{self.conf.name}/latent.pkl'
 
             if self.global_rank == 0:
                 conds_mean = conds.mean(dim=0)
@@ -797,12 +604,14 @@ def on_train_batch_end(self, outputs, batch, batch_idx: int, dataloader_idx: int
                         'conds': conds,
                         'conds_mean': conds_mean,
                         'conds_std': conds_std,
-                    }, save_path)
+                    }, save_path
+                )
+
         """
         "infer+render" = predict the latent variables using the encoder on the whole dataset
         THIS ALSO GENERATE CORRESPONDING IMAGES
         """
-        # infer + reconstruction quality of the input
+        # Infer + reconstruction quality of the input
         for each in self.conf.eval_programs:
             if each.startswith('infer+render'):
                 m = re.match(r'infer\+render([0-9]+)', each)
@@ -813,8 +622,7 @@ def on_train_batch_end(self, outputs, batch, batch_idx: int, dataloader_idx: int
                     conds = self.infer_whole_dataset(
                         with_render=True,
                         T_render=T,
-                        render_save_path=
-                        f'latent_infer_render{T}/{self.conf.name}.lmdb',
+                        render_save_path=f'latent_infer_render{T}/{self.conf.name}.lmdb',
                     )
                     save_path = f'latent_infer_render{T}/{self.conf.name}.pkl'
                     conds_mean = conds.mean(dim=0)
@@ -826,15 +634,16 @@ def on_train_batch_end(self, outputs, batch, batch_idx: int, dataloader_idx: int
                             'conds': conds,
                             'conds_mean': conds_mean,
                             'conds_std': conds_std,
-                        }, save_path)
+                        }, save_path
+                    )
 
-        # evals those "fidXX"
+        # Evaluate those "fidXX"
         """
         "fid<T>" = unconditional generation (conf.train_mode = diffusion).
-            Note:   Diff. autoenc will still receive real images in this mode.
+            Note: Diff. autoenc will still receive real images in this mode.
         "fid<T>,<T_latent>" = unconditional generation for latent models (conf.train_mode = latent_diffusion).
-            Note:   Diff. autoenc will still NOT receive real images in this made.
-                    but you need to make sure that the train_mode is latent_diffusion.
+            Note: Diff. autoenc will still NOT receive real images in this mode,
+                  but you need to make sure that the train_mode is latent_diffusion.
         """
         for each in self.conf.eval_programs:
             if each.startswith('fid'):
@@ -852,9 +661,7 @@ def on_train_batch_end(self, outputs, batch, batch_idx: int, dataloader_idx: int
                         T = int(m[1])
                         T_latent = int(m[2])
                         clip_latent_noise = True
-                        print(
-                            f'evaluating FID (clip latent noise) T = {T}... latent T = {T_latent}'
-                        )
+                        print(f'evaluating FID (clip latent noise) T = {T}... latent T = {T_latent}')
                     else:
                         # evalT
                         _, T = each.split('fid')
@@ -862,16 +669,15 @@ def on_train_batch_end(self, outputs, batch, batch_idx: int, dataloader_idx: int
                         T_latent = None
                         print(f'evaluating FID T = {T}...')
 
-                self.train_dataloader()
+                # Generate samples
                 sampler = self.conf._make_diffusion_conf(T=T).make_sampler()
                 if T_latent is not None:
-                    latent_sampler = self.conf._make_latent_diffusion_conf(
-                        T=T_latent).make_sampler()
+                    latent_sampler = self.conf._make_latent_diffusion_conf(T=T_latent).make_sampler()
                 else:
                     latent_sampler = None
 
                 conf = self.conf.clone()
-                conf.eval_num_images = 50_000
+                conf.eval_num_images = 50_000  # Adjust as needed
                 score = evaluate_fid(
                     sampler,
                     self.ema_model,
@@ -893,6 +699,7 @@ def on_train_batch_end(self, outputs, batch, batch_idx: int, dataloader_idx: int
                         name += '_clip'
                     name += f'_ema_T{T}_Tlatent{T_latent}'
                     self.log(name, score)
+
         """
         "recon<T>" = reconstruction & autoencoding (without noise inversion)
         """
@@ -906,17 +713,20 @@ def on_train_batch_end(self, outputs, batch, batch_idx: int, dataloader_idx: int
                 sampler = self.conf._make_diffusion_conf(T=T).make_sampler()
 
                 conf = self.conf.clone()
-                # eval whole val dataset
+                # Eval whole val dataset
                 conf.eval_num_images = len(self.val_data)
                 # {'lpips', 'mse', 'ssim'}
-                score = evaluate_lpips(sampler,
-                                       self.ema_model,
-                                       conf,
-                                       device=self.device,
-                                       val_data=self.val_data,
-                                       latent_sampler=None)
+                score = evaluate_lpips(
+                    sampler,
+                    self.ema_model,
+                    conf,
+                    device=self.device,
+                    val_data=self.val_data,
+                    latent_sampler=None
+                )
                 for k, v in score.items():
                     self.log(f'{k}_ema_T{T}', v)
+
         """
         "inv<T>" = reconstruction with noise inversion
         """
@@ -925,23 +735,23 @@ def on_train_batch_end(self, outputs, batch, batch_idx: int, dataloader_idx: int
                 self.model: BeatGANsAutoencModel
                 _, T = each.split('inv')
                 T = int(T)
-                print(
-                    f'evaluating reconstruction with noise inversion T = {T}...'
-                )
+                print(f'evaluating reconstruction with noise inversion T = {T}...')
 
                 sampler = self.conf._make_diffusion_conf(T=T).make_sampler()
 
                 conf = self.conf.clone()
-                # eval whole val dataset
+                # Eval whole val dataset
                 conf.eval_num_images = len(self.val_data)
                 # {'lpips', 'mse', 'ssim'}
-                score = evaluate_lpips(sampler,
-                                       self.ema_model,
-                                       conf,
-                                       device=self.device,
-                                       val_data=self.val_data,
-                                       latent_sampler=None,
-                                       use_inverted_noise=True)
+                score = evaluate_lpips(
+                    sampler,
+                    self.ema_model,
+                    conf,
+                    device=self.device,
+                    val_data=self.val_data,
+                    latent_sampler=None,
+                    use_inverted_noise=True
+                )
                 for k, v in score.items():
                     self.log(f'{k}_inv_ema_T{T}', v)
 
@@ -950,8 +760,7 @@ def ema(source, target, decay):
     source_dict = source.state_dict()
     target_dict = target.state_dict()
     for key in source_dict.keys():
-        target_dict[key].data.copy_(target_dict[key].data * decay +
-                                    source_dict[key].data * (1 - decay))
+        target_dict[key].data.copy_(target_dict[key].data * decay + source_dict[key].data * (1 - decay))
 
 
 class WarmupLR:
@@ -975,11 +784,12 @@ def train(conf: TrainConfig, gpus, nodes=1, mode: str = 'train'):
 
     if not os.path.exists(conf.logdir):
         os.makedirs(conf.logdir)
-    checkpoint = ModelCheckpoint(dirpath=f'{conf.logdir}',
-                                 save_last=True,
-                                 save_top_k=1,
-                                 every_n_train_steps=conf.save_every_samples //
-                                 conf.batch_size_effective)
+    checkpoint = ModelCheckpoint(
+        dirpath=f'{conf.logdir}',
+        save_last=True,
+        save_top_k=1,
+        every_n_train_steps=conf.save_every_samples // conf.batch_size_effective
+    )
     checkpoint_path = f'{conf.logdir}/last.ckpt'
     print('ckpt path:', checkpoint_path)
     if os.path.exists(checkpoint_path):
@@ -987,26 +797,21 @@ def train(conf: TrainConfig, gpus, nodes=1, mode: str = 'train'):
         print('resume!')
     else:
         if conf.continue_from is not None:
-            # continue from a checkpoint
+            # Continue from a checkpoint
             resume = conf.continue_from.path
         else:
             resume = None
 
-    tb_logger = pl_loggers.TensorBoardLogger(save_dir=conf.logdir,
-                                             name=None,
-                                             version='')
+    tb_logger = pl_loggers.TensorBoardLogger(save_dir=conf.logdir, name=None, version='')
 
-    # from pytorch_lightning.
-
+    # Initialize plugins
     plugins = []
-    if len(gpus) == 1 and nodes == 1:
-        accelerator = None
-    else:
+    if len(gpus) > 1 or nodes > 1:
         accelerator = 'ddp'
         from pytorch_lightning.plugins import DDPPlugin
-
-        # important for working with gradient checkpoint
         plugins.append(DDPPlugin(find_unused_parameters=False))
+    else:
+        accelerator = None
 
     trainer = pl.Trainer(
         max_steps=conf.total_samples // conf.batch_size_effective,
@@ -1017,9 +822,9 @@ def train(conf: TrainConfig, gpus, nodes=1, mode: str = 'train'):
         precision=16 if conf.fp16 else 32,
         callbacks=[
             checkpoint,
-            LearningRateMonitor(),
+            LearningRateMonitor(logging_interval='step'),
         ],
-        # clip in the model instead
+        # Clip gradients in the model instead
         # gradient_clip_val=conf.grad_clip,
         replace_sampler_ddp=True,
         logger=tb_logger,
@@ -1029,40 +834,32 @@ def train(conf: TrainConfig, gpus, nodes=1, mode: str = 'train'):
 
     if mode == 'train':
         trainer.fit(model)
-    elif mode == 'eval':
-        # load the latest checkpoint
-        # perform lpips
-        # dummy loader to allow calling "test_step"
-        dummy = DataLoader(TensorDataset(torch.tensor([0.] * conf.batch_size)),
-                           batch_size=conf.batch_size)
+    elif mode == 'test':
+        # Load the latest checkpoint
+        # Perform evaluation based on existing eval_programs
+        # Dummy loader to allow calling "test_step"
+        dummy = DataLoader(TensorDataset(torch.tensor([0.] * conf.batch_size)), batch_size=conf.batch_size)
         eval_path = conf.eval_path or checkpoint_path
-        # conf.eval_num_images = 50
         print('loading from:', eval_path)
         state = torch.load(eval_path, map_location='cpu')
         print('step:', state['global_step'])
         model.load_state_dict(state['state_dict'])
-        # trainer.fit(model)
         out = trainer.test(model, dataloaders=dummy)
-        # first (and only) loader
+        # First (and only) loader
         out = out[0]
         print(out)
 
         if get_rank() == 0:
-            # save to tensorboard
+            # Save to TensorBoard
             for k, v in out.items():
-                tb_logger.experiment.add_scalar(
-                    k, v, state['global_step'] * conf.batch_size_effective)
+                tb_logger.experiment.add_scalar(k, v, state['global_step'] * conf.batch_size_effective)
 
-            # # save to file
-            # # make it a dict of list
-            # for k, v in out.items():
-            #     out[k] = [v]
+            # Save to file
             tgt = f'evals/{conf.name}.txt'
             dirname = os.path.dirname(tgt)
             if not os.path.exists(dirname):
                 os.makedirs(dirname)
             with open(tgt, 'a') as f:
                 f.write(json.dumps(out) + "\n")
-            # pd.DataFrame(out).to_csv(tgt)
     else:
         raise NotImplementedError()
