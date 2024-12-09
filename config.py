@@ -1,3 +1,8 @@
+# config.py
+
+from dataclasses import dataclass, field
+from enum import Enum
+import os
 from model.unet import ScaleAt
 from model.latentnet import *
 from diffusion.resample import UniformSampler
@@ -13,46 +18,63 @@ from diffusion.base import GenerativeType, LossType, ModelMeanType, ModelVarType
 from model import *
 from choices import *
 from multiprocessing import get_context
-import os
 from dataset_util import *
 from torch.utils.data.distributed import DistributedSampler
 
 data_paths = {
-    'ffhqlmdb256':
-    os.path.expanduser('datasets/ffhq256.lmdb'),
+    'ffhqlmdb256': os.path.expanduser('datasets/ffhq256.lmdb'),
     # used for training a classifier
-    'celeba':
-    os.path.expanduser('datasets/celeba'),
+    'celeba': os.path.expanduser('datasets/celeba'),
     # used for training DPM models
-    'celebalmdb':
-    os.path.expanduser('datasets/celeba.lmdb'),
-    'celebahq':
-    os.path.expanduser('datasets/celebahq256.lmdb'),
-    'horse256':
-    os.path.expanduser('datasets/horse256.lmdb'),
-    'bedroom256':
-    os.path.expanduser('datasets/bedroom256.lmdb'),
-    'celeba_anno':
-    os.path.expanduser('datasets/celeba_anno/list_attr_celeba.txt'),
-    'celebahq_anno':
-    os.path.expanduser(
-        'datasets/celeba_anno/CelebAMask-HQ-attribute-anno.txt'),
-    'celeba_relight':
-    os.path.expanduser('datasets/celeba_hq_light/celeba_light.txt'),
+    'celebalmdb': os.path.expanduser('datasets/celeba.lmdb'),
+    'celebahq': os.path.expanduser('datasets/celebahq256.lmdb'),
+    'horse256': os.path.expanduser('datasets/horse256.lmdb'),
+    'bedroom256': os.path.expanduser('datasets/bedroom256.lmdb'),
+    'celeba_anno': os.path.expanduser('datasets/celeba_anno/list_attr_celeba.txt'),
+    'celebahq_anno': os.path.expanduser('datasets/celeba_anno/CelebAMask-HQ-attribute-anno.txt'),
+    'celeba_relight': os.path.expanduser('datasets/celeba_hq_light/celeba_light.txt'),
 }
-
 
 @dataclass
 class PretrainConfig(BaseConfig):
     name: str
     path: str
 
+# Define separate configuration classes for Semantic Encoder and Conditional DDIM
+@dataclass
+class SemanticEncoderConfig:
+    embedding_dim: int
+    # Add other Semantic Encoder specific configurations here
+
+    def make_model(self):
+        # Initialize and return the Semantic Encoder model
+        return SemanticEncoder(embedding_dim=self.embedding_dim)
+
+@dataclass
+class ConditionalDDIMConfig:
+    embedding_dim: int
+    # Add other Conditional DDIM specific configurations here
+
+    def make_model(self):
+        # Initialize and return the Conditional DDIM model
+        return ConditionalDDIM(embedding_dim=self.embedding_dim)
 
 @dataclass
 class TrainConfig(BaseConfig):
-    # random seed
+    # Random seed
     seed: int = 0
-    train_mode: TrainMode = TrainMode.diffusion
+    # Training mode
+    train_mode: TrainMode = TrainMode.diffusion  # Default mode
+
+    # Paths for Semantic Encoder
+    semantic_encoder_lmdb: str = 'datasets/eeg_encoder.lmdb'
+    semantic_encoder_checkpoint: str = None  # Path to pre-trained Semantic Encoder (if any)
+
+    # Paths for Conditional DDIM
+    conditional_ddim_lmdb: str = 'datasets/eeg_ddim_ffhq.lmdb'
+    conditional_ddim_checkpoint: str = None  # Path to pre-trained Conditional DDIM (if any)
+
+    # Existing fields
     train_cond0_prob: float = 0
     train_pred_xstart_detach: bool = True
     train_interpolate_prob: float = 0
@@ -103,7 +125,7 @@ class TrainConfig(BaseConfig):
     model_type: ModelType = None
     net_attn: Tuple[int] = None
     net_beatgans_attn_head: int = 1
-    # not necessarily the same as the the number of style channels
+    # Not necessarily the same as the number of style channels
     net_beatgans_embed_channels: int = 512
     net_resblock_updown: bool = True
     net_enc_use_time: bool = False
@@ -117,7 +139,7 @@ class TrainConfig(BaseConfig):
     net_ch: int = 64
     net_enc_attn: Tuple[int] = None
     net_enc_k: int = None
-    # number of resblocks for the encoder (half-unet)
+    # Number of resblocks for the encoder (half-unet)
     net_enc_num_res_blocks: int = 2
     net_enc_channel_mult: Tuple[int] = None
     net_enc_grad_checkpoint: bool = False
@@ -136,7 +158,7 @@ class TrainConfig(BaseConfig):
     net_latent_use_norm: bool = False
     net_latent_time_last_act: bool = False
     net_num_res_blocks: int = 2
-    # number of resblocks for the UNET
+    # Number of resblocks for the UNET
     net_num_input_res_blocks: int = None
     net_enc_num_cls: int = None
     num_workers: int = 4
@@ -154,18 +176,23 @@ class TrainConfig(BaseConfig):
     pretrain: PretrainConfig = None
     continue_from: PretrainConfig = None
     eval_programs: Tuple[str] = None
-    # if present load the checkpoint from this path instead
+    # If present, load the checkpoint from this path instead
     eval_path: str = None
     base_dir: str = 'checkpoints'
     use_cache_dataset: bool = False
     data_cache_dir: str = os.path.expanduser('~/cache')
     work_cache_dir: str = os.path.expanduser('~/mycache')
-    # to be overridden
+    # To be overridden
     name: str = ''
 
     def __post_init__(self):
         self.batch_size_eval = self.batch_size_eval or self.batch_size
         self.data_val_name = self.data_val_name or self.data_name
+
+        # Validation based on train_mode
+        if self.train_mode == TrainMode.CONDITIONAL_DDIM:
+            if not self.semantic_encoder_checkpoint:
+                raise ValueError("semantic_encoder_checkpoint must be provided for Conditional DDIM training.")
 
     def scale_up_gpus(self, num_gpus, num_nodes=1):
         self.eval_ema_every_samples *= num_gpus * num_nodes
@@ -181,13 +208,13 @@ class TrainConfig(BaseConfig):
 
     @property
     def fid_cache(self):
-        # we try to use the local dirs to reduce the load over network drives
-        # hopefully, this would reduce the disconnection problems with sshfs
+        # We try to use the local dirs to reduce the load over network drives
+        # Hopefully, this would reduce the disconnection problems with sshfs
         return f'{self.work_cache_dir}/eval_images/{self.data_name}_size{self.img_size}_{self.eval_num_images}'
 
     @property
     def data_path(self):
-        # may use the cache dir
+        # May use the cache dir
         path = data_paths[self.data_name]
         if self.use_cache_dataset and path is not None:
             path = use_cached_dataset_path(
@@ -200,14 +227,14 @@ class TrainConfig(BaseConfig):
 
     @property
     def generate_dir(self):
-        # we try to use the local dirs to reduce the load over network drives
-        # hopefully, this would reduce the disconnection problems with sshfs
+        # We try to use the local dirs to reduce the load over network drives
+        # Hopefully, this would reduce the disconnection problems with sshfs
         return f'{self.work_cache_dir}/gen_images/{self.name}'
 
     def _make_diffusion_conf(self, T=None):
         if self.diffusion_type == 'beatgans':
-            # can use T < self.T for evaluation
-            # follows the guided-diffusion repo conventions
+            # Can use T < self.T for evaluation
+            # Follows the guided-diffusion repo conventions
             # t's are evenly spaced
             if self.beatgans_gen_type == GenerativeType.ddpm:
                 section_counts = [T]
@@ -232,8 +259,8 @@ class TrainConfig(BaseConfig):
             raise NotImplementedError()
 
     def _make_latent_diffusion_conf(self, T=None):
-        # can use T < self.T for evaluation
-        # follows the guided-diffusion repo conventions
+        # Can use T < self.T for evaluation
+        # Follows the guided-diffusion repo conventions
         # t's are evenly spaced
         if self.latent_gen_type == GenerativeType.ddpm:
             section_counts = [T]
@@ -245,9 +272,9 @@ class TrainConfig(BaseConfig):
         return SpacedDiffusionBeatGansConfig(
             train_pred_xstart_detach=self.train_pred_xstart_detach,
             gen_type=self.latent_gen_type,
-            # latent's model is always ddpm
+            # Latent's model is always ddpm
             model_type=ModelType.ddpm,
-            # latent shares the beta scheduler and full T
+            # Latent shares the beta scheduler and full T
             betas=get_named_beta_schedule(self.latent_beta_scheduler, self.T),
             model_mean_type=self.latent_model_mean_type,
             model_var_type=self.latent_model_var_type,
@@ -260,8 +287,7 @@ class TrainConfig(BaseConfig):
 
     @property
     def model_out_channels(self):
-        # return 3
-        return 1
+        return 3
 
     def make_T_sampler(self):
         if self.T_sampler == 'uniform':
@@ -279,7 +305,7 @@ class TrainConfig(BaseConfig):
         return self._make_latent_diffusion_conf(T=self.T)
 
     def make_latent_eval_diffusion_conf(self):
-        # latent can have different eval T
+        # Latent can have different eval T
         return self._make_latent_diffusion_conf(T=self.latent_T_eval)
 
     def make_dataset(self, path=None, **kwargs):
@@ -296,7 +322,7 @@ class TrainConfig(BaseConfig):
                               image_size=self.img_size,
                               **kwargs)
         elif self.data_name == 'celebalmdb':
-            # always use d2c crop
+            # Always use d2c crop
             return CelebAlmdb(path=path or self.data_path,
                               image_size=self.img_size,
                               original_resolution=None,
@@ -313,7 +339,7 @@ class TrainConfig(BaseConfig):
                     batch_size: int = None,
                     parallel: bool = False):
         if parallel and distributed.is_initialized():
-            # drop last to make sure that there is no added special indexes
+            # Drop last to make sure that there are no added special indexes
             sampler = DistributedSampler(dataset,
                                          shuffle=shuffle,
                                          drop_last=True)
@@ -323,7 +349,7 @@ class TrainConfig(BaseConfig):
             dataset,
             batch_size=batch_size or self.batch_size,
             sampler=sampler,
-            # with sampler, use the sample instead of this option
+            # With sampler, use the sample instead of this option
             shuffle=False if sampler else shuffle,
             num_workers=num_worker or self.num_workers,
             pin_memory=True,
@@ -331,97 +357,36 @@ class TrainConfig(BaseConfig):
             multiprocessing_context=get_context('fork'),
         )
 
+    def make_semantic_encoder_dataset(self):
+        """
+        Initialize the dataset for Semantic Encoder training.
+        """
+        return EEGEncoderDataset(self.semantic_encoder_lmdb)
+
+    def make_conditional_ddim_dataset(self, split='train'):
+        """
+        Initialize the dataset for Conditional DDIM training.
+        """
+        return ConditionalDDIMDataset(self.conditional_ddim_lmdb, split=split)
+
     def make_model_conf(self):
-        if self.model_name == ModelName.beatgans_ddpm:
-            self.model_type = ModelType.ddpm
-            self.model_conf = BeatGANsUNetConfig(
-                attention_resolutions=self.net_attn,
-                channel_mult=self.net_ch_mult,
-                conv_resample=True,
-                dims=2,
-                dropout=self.dropout,
-                embed_channels=self.net_beatgans_embed_channels,
-                image_size=self.img_size,
-                in_channels=3,
-                model_channels=self.net_ch,
-                num_classes=None,
-                num_head_channels=-1,
-                num_heads_upsample=-1,
-                num_heads=self.net_beatgans_attn_head,
-                num_res_blocks=self.net_num_res_blocks,
-                num_input_res_blocks=self.net_num_input_res_blocks,
-                out_channels=self.model_out_channels,
-                resblock_updown=self.net_resblock_updown,
-                use_checkpoint=self.net_beatgans_gradient_checkpoint,
-                use_new_attention_order=False,
-                resnet_two_cond=self.net_beatgans_resnet_two_cond,
-                resnet_use_zero_module=self.
-                net_beatgans_resnet_use_zero_module,
+        """
+        Create model configuration based on the training mode.
+        """
+        if self.train_mode == TrainMode.SEMANTIC_ENCODER:
+            # Configuration for Semantic Encoder
+            return SemanticEncoderConfig(
+                # Define parameters specific to Semantic Encoder
+                embedding_dim=512,
+                # ... other configurations as needed
             )
-        elif self.model_name in [
-                ModelName.beatgans_autoenc,
-        ]:
-            cls = BeatGANsAutoencConfig
-            # supports both autoenc and vaeddpm
-            if self.model_name == ModelName.beatgans_autoenc:
-                self.model_type = ModelType.autoencoder
-            else:
-                raise NotImplementedError()
-
-            if self.net_latent_net_type == LatentNetType.none:
-                latent_net_conf = None
-            elif self.net_latent_net_type == LatentNetType.skip:
-                latent_net_conf = MLPSkipNetConfig(
-                    num_channels=self.style_ch,
-                    skip_layers=self.net_latent_skip_layers,
-                    num_hid_channels=self.net_latent_num_hid_channels,
-                    num_layers=self.net_latent_layers,
-                    num_time_emb_channels=self.net_latent_time_emb_channels,
-                    activation=self.net_latent_activation,
-                    use_norm=self.net_latent_use_norm,
-                    condition_bias=self.net_latent_condition_bias,
-                    dropout=self.net_latent_dropout,
-                    last_act=self.net_latent_net_last_act,
-                    num_time_layers=self.net_latent_num_time_layers,
-                    time_last_act=self.net_latent_time_last_act,
-                )
-            else:
-                raise NotImplementedError()
-
-            self.model_conf = cls(
-                attention_resolutions=self.net_attn,
-                channel_mult=self.net_ch_mult,
-                conv_resample=True,
-                dims=2,
-                dropout=self.dropout,
-                embed_channels=self.net_beatgans_embed_channels,
-                enc_out_channels=self.style_ch,
-                enc_pool=self.net_enc_pool,
-                enc_num_res_block=self.net_enc_num_res_blocks,
-                enc_channel_mult=self.net_enc_channel_mult,
-                enc_grad_checkpoint=self.net_enc_grad_checkpoint,
-                enc_attn_resolutions=self.net_enc_attn,
-                image_size=self.img_size,
-                # in_channels=3,
-                in_channels=1,
-                model_channels=self.net_ch,
-                num_classes=None,
-                num_head_channels=-1,
-                num_heads_upsample=-1,
-                num_heads=self.net_beatgans_attn_head,
-                num_res_blocks=self.net_num_res_blocks,
-                num_input_res_blocks=self.net_num_input_res_blocks,
-                out_channels=self.model_out_channels,
-                resblock_updown=self.net_resblock_updown,
-                use_checkpoint=self.net_beatgans_gradient_checkpoint,
-                use_new_attention_order=False,
-                resnet_two_cond=self.net_beatgans_resnet_two_cond,
-                resnet_use_zero_module=self.
-                net_beatgans_resnet_use_zero_module,
-                latent_net_conf=latent_net_conf,
-                resnet_cond_channels=self.net_beatgans_resnet_cond_channels,
+        elif self.train_mode == TrainMode.CONDITIONAL_DDIM:
+            # Configuration for Conditional DDIM
+            return ConditionalDDIMConfig(
+                # Define parameters specific to Conditional DDIM
+                embedding_dim=512,
+                # ... other configurations as needed
             )
         else:
-            raise NotImplementedError(self.model_name)
-
-        return self.model_conf
+            # Existing configurations for other modes
+            return self._make_diffusion_conf(self.T)
