@@ -1,269 +1,235 @@
-# config.py
-
-from dataclasses import dataclass, field
-from enum import Enum
 import os
+from dataclasses import dataclass, field
+from typing import Tuple, Optional, Union, List
+
+import torch
+from torch.utils.data import Dataset, DataLoader
+from enum import Enum, auto
+
 from model.unet import ScaleAt
 from model.latentnet import *
 from diffusion.resample import UniformSampler
 from diffusion.diffusion import space_timesteps
-from typing import Tuple
-
-from torch.utils.data import DataLoader, Subset
-
-from config_base import BaseConfig
-from dataset import *
-from diffusion import *
-from diffusion.base import GenerativeType, LossType, ModelMeanType, ModelVarType, get_named_beta_schedule
+from diffusion.base import (
+    GenerativeType,
+    LossType,
+    ModelMeanType,
+    ModelVarType,
+    get_named_beta_schedule
+)
 from model import *
 from choices import *
-from multiprocessing import get_context
 from dataset_util import *
 from torch.utils.data.distributed import DistributedSampler
 
-# Define data paths
-data_paths = {
-    'ffhqlmdb256': os.path.expanduser('datasets/ffhq256.lmdb'),
-    # used for training a classifier
-    'celeba': os.path.expanduser('datasets/celeba'),
-    # used for training DPM models
-    'celebalmdb': os.path.expanduser('datasets/celeba.lmdb'),
-    'celebahq': os.path.expanduser('datasets/celebahq256.lmdb'),
-    'horse256': os.path.expanduser('datasets/horse256.lmdb'),
-    'bedroom256': os.path.expanduser('datasets/bedroom256.lmdb'),
-    'celeba_anno': os.path.expanduser('datasets/celeba_anno/list_attr_celeba.txt'),
-    'celebahq_anno': os.path.expanduser('datasets/celeba_anno/CelebAMask-HQ-attribute-anno.txt'),
-    'celeba_relight': os.path.expanduser('datasets/celeba_hq_light/celeba_light.txt'),
-}
+
+# Define the available training modes
+class TrainMode(Enum):
+    encoder = auto()
+    latent_diffusion = auto()
+    # Add other modes if necessary
+
+
+# Define Latent Network Types
+class LatentNetType(Enum):
+    none = auto()
+    skip = auto()
+    # Add other types if necessary
+
 
 @dataclass
-class PretrainConfig(BaseConfig):
+class PretrainConfig:
     name: str
     path: str
 
-# Separate configuration classes for Semantic Encoder and Conditional DDIM
-@dataclass
-class SemanticEncoderConfig:
-    embedding_dim: int
-    input_channels: int = 3  # Adjust based on your EEG data's channel count
-    hidden_layers: Tuple[int] = (256, 512)  # Example hidden layers
-    activation: Activation = Activation.relu  # Example activation
-
-    def make_model(self):
-        # Initialize and return the Semantic Encoder model
-        return SemanticEncoder(
-            embedding_dim=self.embedding_dim,
-            input_channels=self.input_channels,
-            hidden_layers=self.hidden_layers,
-            activation=self.activation.get_act()
-        )
 
 @dataclass
-class ConditionalDDIMConfig:
-    embedding_dim: int
-    img_size: int = 64
-    output_channels: int = 3  # RGB images
-    hidden_layers: Tuple[int] = (256, 512, 1024)  # Example hidden layers
-    activation: Activation = Activation.relu  # Example activation
-
-    def make_model(self):
-        # Initialize and return the Conditional DDIM model
-        return ConditionalDDIM(
-            embedding_dim=self.embedding_dim,
-            img_size=self.img_size,
-            output_channels=self.output_channels,
-            hidden_layers=self.hidden_layers,
-            activation=self.activation.get_act()
-        )
-
-@dataclass
-class TrainConfig(BaseConfig):
-    # Random seed
+class TrainConfig:
+    """
+    Configuration class for training and evaluation.
+    """
+    # -----------------------
+    # General Settings
+    # -----------------------
+    name: str = ''
     seed: int = 0
-    # Training mode
-    train_mode: TrainMode = TrainMode.diffusion  # Default mode
-
-    # Paths for Semantic Encoder
-    semantic_encoder_lmdb: str = 'datasets/eeg_encoder.lmdb'
-    semantic_encoder_checkpoint: str = None  # Path to pre-trained Semantic Encoder (if any)
-
-    # Paths for Conditional DDIM
-    conditional_ddim_lmdb: str = 'datasets/eeg_ddim_ffhq.lmdb'
-    conditional_ddim_checkpoint: str = None  # Path to pre-trained Conditional DDIM (if any)
-
-    # Limiting datasets to 10 samples for testing
-    max_train_samples: int = 10
-    max_val_samples: int = 10
-
-    # Existing fields
-    train_cond0_prob: float = 0
-    train_pred_xstart_detach: bool = True
-    train_interpolate_prob: float = 0
-    train_interpolate_img: bool = False
-    manipulate_mode: ManipulateMode = ManipulateMode.celebahq_all
-    manipulate_cls: str = None
-    manipulate_shots: int = None
-    manipulate_loss: ManipulateLossType = ManipulateLossType.bce
-    manipulate_znormalize: bool = False
-    manipulate_seed: int = 0
+    base_dir: str = 'checkpoints'
+    logdir: str = field(init=False)
+    generate_dir: str = field(init=False)
+    postfix: str = ''
+    
+    # -----------------------
+    # Data Settings
+    # -----------------------
+    data_name: str = ''
+    data_val_name: Optional[str] = None
+    data_path: str = field(init=False)
+    data_val_path: Optional[str] = None
+    use_cache_dataset: bool = False
+    data_cache_dir: str = os.path.expanduser('~/cache')
+    work_cache_dir: str = os.path.expanduser('~/mycache')
+    eval_num_images: int = 5_000
+    num_workers: int = 4
+    parallel: bool = False
+    sample_size: int = 64
+    
+    # -----------------------
+    # Training Mode
+    # -----------------------
+    train_mode: TrainMode = TrainMode.encoder
+    eval_programs: Tuple[str, ...] = field(default_factory=tuple)
+    
+    # -----------------------
+    # Model Settings
+    # -----------------------
+    model_name: ModelName = None
+    model_type: ModelType = None
+    model_conf: Optional['ModelConfig'] = None  # Forward reference
+    
+    # -----------------------
+    # Optimizer Settings
+    # -----------------------
+    optimizer: OptimizerType = OptimizerType.adam
+    lr: float = 0.0001
+    weight_decay: float = 0
+    warmup: int = 0
+    grad_clip: float = 1
+    fp16: bool = False
     accum_batches: int = 1
-    autoenc_mid_attn: bool = True
+    
+    # -----------------------
+    # Scheduler Settings
+    # -----------------------
+    # No specific scheduler settings added here; use defaults or extend as needed
+    
+    # -----------------------
+    # EMA Settings
+    # -----------------------
+    ema_decay: float = 0.9999
+    
+    # -----------------------
+    # Batch Settings
+    # -----------------------
     batch_size: int = 16
-    batch_size_eval: int = None
+    batch_size_eval: Optional[int] = None
+    batch_size_effective: int = field(init=False)
+    
+    # -----------------------
+    # Sampling Settings
+    # -----------------------
+    T: int = 1_000
+    T_eval: int = 1_000
+    T_sampler: str = 'uniform'
+    latent_T_eval: int = 1_000
+    latent_gen_type: GenerativeType = GenerativeType.ddim
+    latent_beta_scheduler: str = 'linear'
+    latent_clip_sample: bool = False
+    latent_rescale_timesteps: bool = False
+    latent_loss_type: LossType = LossType.mse
+    latent_model_mean_type: ModelMeanType = ModelMeanType.eps
+    latent_model_var_type: ModelVarType = ModelVarType.fixed_large
+    latent_net_type: LatentNetType = LatentNetType.none
+    latent_num_hid_channels: int = 1024
+    latent_num_time_layers: int = 2
+    latent_skip_layers: Optional[Tuple[int, ...]] = None
+    latent_time_emb_channels: int = 64
+    latent_use_norm: bool = False
+    latent_time_last_act: bool = False
+    latent_net_last_act: Optional[Union[Activation, None]] = Activation.none
+    latent_znormalize: bool = False
+    latent_infer_path: Optional[str] = None
+    
+    # -----------------------
+    # Model Architecture Settings
+    # -----------------------
+    # Encoder-specific settings
+    enc_num_res_blocks: int = 2
+    enc_channel_mult: Optional[Tuple[int, ...]] = None
+    enc_attn: Optional[Tuple[int, ...]] = None
+    enc_pool: str = 'adaptivenonzero'
+    enc_grad_checkpoint: bool = False
+    enc_use_time: bool = False
+    enc_num_cls: Optional[int] = None
+    
+    # DDIM-specific settings
     beatgans_gen_type: GenerativeType = GenerativeType.ddim
     beatgans_loss_type: LossType = LossType.mse
     beatgans_model_mean_type: ModelMeanType = ModelMeanType.eps
     beatgans_model_var_type: ModelVarType = ModelVarType.fixed_large
     beatgans_rescale_timesteps: bool = False
-    latent_infer_path: str = None
-    latent_znormalize: bool = False
-    latent_gen_type: GenerativeType = GenerativeType.ddim
-    latent_loss_type: LossType = LossType.mse
-    latent_model_mean_type: ModelMeanType = ModelMeanType.eps
-    latent_model_var_type: ModelVarType = ModelVarType.fixed_large
-    latent_rescale_timesteps: bool = False
-    latent_T_eval: int = 1_000
-    latent_clip_sample: bool = False
-    latent_beta_scheduler: str = 'linear'
-    beta_scheduler: str = 'linear'
-    data_name: str = ''
-    data_val_name: str = None
-    diffusion_type: str = None
+    beatgans_embed_channels: int = 512
+    beatgans_attn_head: int = 1
+    beatgans_gradient_checkpoint: bool = False
+    beatgans_resnet_two_cond: bool = False
+    beatgans_resnet_use_zero_module: bool = True
+    beatgans_resnet_scale_at: ScaleAt = ScaleAt.after_norm
+    beatgans_resnet_cond_channels: Optional[int] = None
+    
+    # -----------------------
+    # Latent Network Settings
+    # -----------------------
+    latent_activation: Activation = Activation.silu
+    latent_channel_mult: Tuple[int, ...] = (1, 2, 4)
+    latent_condition_bias: float = 0
+    latent_dropout: float = 0
+    
+    # -----------------------
+    # Other Settings
+    # -----------------------
     dropout: float = 0.1
-    ema_decay: float = 0.9999
-    eval_num_images: int = 5_000
-    eval_every_samples: int = 200_000
-    eval_ema_every_samples: int = 200_000
-    fid_use_torch: bool = True
-    fp16: bool = False
-    grad_clip: float = 1
-    img_size: int = 64
-    lr: float = 0.0001
-    optimizer: OptimizerType = OptimizerType.adam
-    weight_decay: float = 0
-    model_conf: ModelConfig = None
-    model_name: ModelName = None
-    model_type: ModelType = None
-    net_attn: Tuple[int] = None
-    net_beatgans_attn_head: int = 1
-    # Not necessarily the same as the number of style channels
-    net_beatgans_embed_channels: int = 512
-    net_resblock_updown: bool = True
-    net_enc_use_time: bool = False
-    net_enc_pool: str = 'adaptivenonzero'
-    net_beatgans_gradient_checkpoint: bool = False
-    net_beatgans_resnet_two_cond: bool = False
-    net_beatgans_resnet_use_zero_module: bool = True
-    net_beatgans_resnet_scale_at: ScaleAt = ScaleAt.after_norm
-    net_beatgans_resnet_cond_channels: int = None
-    net_ch_mult: Tuple[int] = None
-    net_ch: int = 64
-    net_enc_attn: Tuple[int] = None
-    net_enc_k: int = None
-    # Number of resblocks for the encoder (half-unet)
-    net_enc_num_res_blocks: int = 2
-    net_enc_channel_mult: Tuple[int] = None
-    net_enc_grad_checkpoint: bool = False
-    net_autoenc_stochastic: bool = False
-    net_latent_activation: Activation = Activation.silu
-    net_latent_channel_mult: Tuple[int] = (1, 2, 4)
-    net_latent_condition_bias: float = 0
-    net_latent_dropout: float = 0
-    net_latent_layers: int = None
-    net_latent_net_last_act: Activation = Activation.none
-    net_latent_net_type: LatentNetType = LatentNetType.none
-    net_latent_num_hid_channels: int = 1024
-    net_latent_num_time_layers: int = 2
-    net_latent_skip_layers: Tuple[int] = None
-    net_latent_time_emb_channels: int = 64
-    net_latent_use_norm: bool = False
-    net_latent_time_last_act: bool = False
-    net_num_res_blocks: int = 2
-    # Number of resblocks for the UNET
-    net_num_input_res_blocks: int = None
-    net_enc_num_cls: int = None
-    num_workers: int = 4
-    parallel: bool = False
-    postfix: str = ''
-    sample_size: int = 64
-    sample_every_samples: int = 20_000
-    save_every_samples: int = 100_000
-    style_ch: int = 512
-    T_eval: int = 1_000
-    T_sampler: str = 'uniform'
-    T: int = 1_000
-    total_samples: int = 10_000_000
-    warmup: int = 0
-    pretrain: PretrainConfig = None
-    continue_from: PretrainConfig = None
-    eval_programs: Tuple[str] = None
-    # If present, load the checkpoint from this path instead
-    eval_path: str = None
-    base_dir: str = 'checkpoints'
-    use_cache_dataset: bool = False
-    data_cache_dir: str = os.path.expanduser('~/cache')
-    work_cache_dir: str = os.path.expanduser('~/mycache')
-    # To be overridden
-    name: str = ''
-
+    # Add other necessary fields as required
+    
+    # -----------------------
+    # Pretrain and Continue
+    # -----------------------
+    pretrain: Optional[PretrainConfig] = None
+    continue_from: Optional[PretrainConfig] = None
+    
     def __post_init__(self):
+        # Initialize derived fields
         self.batch_size_eval = self.batch_size_eval or self.batch_size
+        self.batch_size_effective = self.batch_size * self.accum_batches
         self.data_val_name = self.data_val_name or self.data_name
-
-        # Validation based on train_mode
-        if self.train_mode == TrainMode.conditional_ddim:
-            if not self.semantic_encoder_checkpoint:
-                raise ValueError("semantic_encoder_checkpoint must be provided for Conditional DDIM training.")
-
+        self.logdir = f'{self.base_dir}/{self.name}'
+        self.generate_dir = f'{self.work_cache_dir}/gen_images/{self.name}'
+        self.data_val_path = data_paths.get(self.data_val_name, None)
+        self.data_path = data_paths.get(self.data_name, None)
+        if self.use_cache_dataset and self.data_path is not None:
+            self.data_path = use_cached_dataset_path(
+                self.data_path, f'{self.data_cache_dir}/{self.data_name}')
+    
     def scale_up_gpus(self, num_gpus, num_nodes=1):
+        """
+        Scale batch sizes and sampling frequencies based on the number of GPUs and nodes.
+        """
         self.eval_ema_every_samples *= num_gpus * num_nodes
         self.eval_every_samples *= num_gpus * num_nodes
         self.sample_every_samples *= num_gpus * num_nodes
         self.batch_size *= num_gpus * num_nodes
         self.batch_size_eval *= num_gpus * num_nodes
         return self
-
-    @property
-    def batch_size_effective(self):
-        return self.batch_size * self.accum_batches
-
-    @property
-    def fid_cache(self):
-        # We try to use the local dirs to reduce the load over network drives
-        # Hopefully, this would reduce the disconnection problems with sshfs
-        return f'{self.work_cache_dir}/eval_images/{self.data_name}_size{self.img_size}_{self.eval_num_images}'
-
-    @property
-    def data_path(self):
-        # May use the cache dir
-        path = data_paths[self.data_name]
-        if self.use_cache_dataset and path is not None:
-            path = use_cached_dataset_path(
-                path, f'{self.data_cache_dir}/{self.data_name}')
-        return path
-
-    @property
-    def logdir(self):
-        return f'{self.base_dir}/{self.name}'
-
-    @property
-    def generate_dir(self):
-        # We try to use the local dirs to reduce the load over network drives
-        # Hopefully, this would reduce the disconnection problems with sshfs
-        return f'{self.work_cache_dir}/gen_images/{self.name}'
-
+    
+    def make_T_sampler(self):
+        """
+        Create a timestep sampler based on the configuration.
+        """
+        if self.T_sampler == 'uniform':
+            return UniformSampler(self.T)
+        else:
+            raise NotImplementedError(f"Sampler type '{self.T_sampler}' is not supported.")
+    
     def _make_diffusion_conf(self, T=None):
+        """
+        Create a diffusion configuration for BeatGANs.
+        """
         if self.diffusion_type == 'beatgans':
-            # Can use T < self.T for evaluation
-            # Follows the guided-diffusion repo conventions
-            # t's are evenly spaced
             if self.beatgans_gen_type == GenerativeType.ddpm:
                 section_counts = [T]
             elif self.beatgans_gen_type == GenerativeType.ddim:
                 section_counts = f'ddim{T}'
             else:
-                raise NotImplementedError()
-
+                raise NotImplementedError(f"GenerativeType '{self.beatgans_gen_type}' is not supported.")
+    
             return SpacedDiffusionBeatGansConfig(
                 gen_type=self.beatgans_gen_type,
                 model_type=self.model_type,
@@ -277,25 +243,23 @@ class TrainConfig(BaseConfig):
                 fp16=self.fp16,
             )
         else:
-            raise NotImplementedError()
-
+            raise NotImplementedError(f"Diffusion type '{self.diffusion_type}' is not supported.")
+    
     def _make_latent_diffusion_conf(self, T=None):
-        # Can use T < self.T for evaluation
-        # Follows the guided-diffusion repo conventions
-        # t's are evenly spaced
+        """
+        Create a diffusion configuration for latent diffusion.
+        """
         if self.latent_gen_type == GenerativeType.ddpm:
             section_counts = [T]
         elif self.latent_gen_type == GenerativeType.ddim:
             section_counts = f'ddim{T}'
         else:
-            raise NotImplementedError()
-
+            raise NotImplementedError(f"GenerativeType '{self.latent_gen_type}' is not supported.")
+    
         return SpacedDiffusionBeatGansConfig(
             train_pred_xstart_detach=self.train_pred_xstart_detach,
             gen_type=self.latent_gen_type,
-            # Latent's model is always ddpm
-            model_type=ModelType.ddpm,
-            # Latent shares the beta scheduler and full T
+            model_type=ModelType.ddpm,  # Latent models are always ddpm
             betas=get_named_beta_schedule(self.latent_beta_scheduler, self.T),
             model_mean_type=self.latent_model_mean_type,
             model_var_type=self.latent_model_var_type,
@@ -305,136 +269,418 @@ class TrainConfig(BaseConfig):
                                           section_counts=section_counts),
             fp16=self.fp16,
         )
-
-    @property
-    def model_out_channels(self):
-        return 3
-
-    def make_T_sampler(self):
-        if self.T_sampler == 'uniform':
-            return UniformSampler(self.T)
-        else:
-            raise NotImplementedError()
-
+    
     def make_diffusion_conf(self):
-        return self._make_diffusion_conf(self.T)
-
-    def make_eval_diffusion_conf(self):
-        return self._make_diffusion_conf(T=self.T_eval)
-
-    def make_latent_diffusion_conf(self):
-        return self._make_latent_diffusion_conf(T=self.T)
-
-    def make_latent_eval_diffusion_conf(self):
-        # Latent can have different eval T
-        return self._make_latent_diffusion_conf(T=self.latent_T_eval)
-
-    def make_dataset(self, path=None, split='train', **kwargs):
-        if self.data_name == 'ffhqlmdb256':
-            return FFHQlmdb(path=path or self.data_path,
-                            image_size=self.img_size,
-                            split=split,
-                            **kwargs)
-        elif self.data_name == 'horse256':
-            return Horse_lmdb(path=path or self.data_path,
-                              image_size=self.img_size,
-                              split=split,
-                              **kwargs)
-        elif self.data_name == 'bedroom256':
-            return Bedroom_lmdb(path=path or self.data_path,
-                                image_size=self.img_size,
-                                split=split,
-                                **kwargs)
-        elif self.data_name == 'celebalmdb':
-            # Always use d2c crop
-            return CelebAlmdb(path=path or self.data_path,
-                              image_size=self.img_size,
-                              original_resolution=None,
-                              crop_d2c=True,
-                              split=split,
-                              **kwargs)
+        """
+        Public method to create a diffusion configuration based on train mode.
+        """
+        if self.train_mode == TrainMode.encoder:
+            return self._make_diffusion_conf(self.T)
+        elif self.train_mode == TrainMode.latent_diffusion:
+            return self._make_latent_diffusion_conf(self.T)
         else:
-            raise NotImplementedError()
-
+            raise NotImplementedError(f"TrainMode '{self.train_mode}' is not supported.")
+    
+    def make_eval_diffusion_conf(self):
+        """
+        Create an evaluation diffusion configuration.
+        """
+        return self._make_diffusion_conf(T=self.T_eval)
+    
+    def make_latent_diffusion_conf(self):
+        """
+        Create a latent diffusion configuration.
+        """
+        return self._make_latent_diffusion_conf(T=self.T)
+    
+    def make_latent_eval_diffusion_conf(self):
+        """
+        Create a latent diffusion evaluation configuration.
+        """
+        return self._make_latent_diffusion_conf(T=self.latent_T_eval)
+    
+    def make_dataset(self, path: Optional[str] = None, **kwargs) -> Dataset:
+        """
+        Create a dataset based on the data name and training mode.
+        """
+        if self.train_mode == TrainMode.encoder:
+            # Encoder training: only EEG data
+            return EEGDataset(path=path or self.data_path, **kwargs)
+        elif self.train_mode == TrainMode.latent_diffusion:
+            # DDIM training: EEG and Image data
+            return ConditionalEEGImageDataset(path=path or self.data_path, **kwargs)
+        else:
+            raise NotImplementedError(f"TrainMode '{self.train_mode}' is not supported.")
+    
+    def make_validation_dataset(self, path: Optional[str] = None, **kwargs) -> Dataset:
+        """
+        Create a validation dataset. Can be the same as training or separate.
+        """
+        if self.data_val_name:
+            val_path = path or self.data_val_path
+            if self.train_mode == TrainMode.encoder:
+                return EEGDataset(path=val_path, **kwargs)
+            elif self.train_mode == TrainMode.latent_diffusion:
+                return ConditionalEEGImageDataset(path=val_path, **kwargs)
+            else:
+                raise NotImplementedError(f"TrainMode '{self.train_mode}' is not supported.")
+        else:
+            return self.make_dataset(path=path, **kwargs)
+    
     def make_loader(self,
-                    dataset,
-                    shuffle: bool,
-                    num_worker: bool = None,
-                    drop_last: bool = True,
-                    batch_size: int = None,
-                    parallel: bool = False):
-        if parallel and distributed.is_initialized():
-            # Drop last to make sure that there are no added special indexes
+                   dataset: Dataset,
+                   shuffle: bool,
+                   num_worker: Optional[int] = None,
+                   drop_last: bool = True,
+                   batch_size: Optional[int] = None,
+                   parallel: bool = False) -> DataLoader:
+        """
+        Create a DataLoader with optional distributed sampling.
+        """
+        if parallel and torch.distributed.is_initialized():
             sampler = DistributedSampler(dataset,
                                          shuffle=shuffle,
                                          drop_last=True)
         else:
             sampler = None
+    
         return DataLoader(
             dataset,
             batch_size=batch_size or self.batch_size,
             sampler=sampler,
-            # With sampler, use the sample instead of this option
             shuffle=False if sampler else shuffle,
             num_workers=num_worker or self.num_workers,
             pin_memory=True,
             drop_last=drop_last,
-            multiprocessing_context=get_context('fork'),
+            multiprocessing_context='fork',  # Adjust if necessary
         )
-
-    def make_semantic_encoder_dataset(self, split='train'):
+    
+    def make_model_conf(self) -> 'ModelConfig':
         """
-        Initialize the dataset for Semantic Encoder training.
-        Limits to `max_train_samples` for training and `max_val_samples` for validation.
+        Create a model configuration based on the model name.
         """
-        dataset = EEGEncoderDataset(self.semantic_encoder_lmdb, split=split)
-        if split == 'train' and self.max_train_samples:
-            # Select the first `max_train_samples` samples for training
-            indices = list(range(min(self.max_train_samples, len(dataset))))
-            dataset = Subset(dataset, indices)
-        elif split == 'val' and self.max_val_samples:
-            # Select the first `max_val_samples` samples for validation
-            indices = list(range(min(self.max_val_samples, len(dataset))))
-            dataset = Subset(dataset, indices)
-        return dataset
-
-    def make_conditional_ddim_dataset(self, split='train'):
-        """
-        Initialize the dataset for Conditional DDIM training.
-        Limits to `max_train_samples` for training and `max_val_samples` for validation.
-        """
-        dataset = ConditionalDDIMDataset(self.conditional_ddim_lmdb, split=split)
-        if split == 'train' and self.max_train_samples:
-            # Select the first `max_train_samples` samples for training
-            indices = list(range(min(self.max_train_samples, len(dataset))))
-            dataset = Subset(dataset, indices)
-        elif split == 'val' and self.max_val_samples:
-            # Select the first `max_val_samples` samples for validation
-            indices = list(range(min(self.max_val_samples, len(dataset))))
-            dataset = Subset(dataset, indices)
-        return dataset
-
-    def make_model_conf(self):
-        """
-        Create model configuration based on the training mode.
-        """
-        if self.train_mode == TrainMode.semantic_encoder:
-            # Configuration for Semantic Encoder
-            return SemanticEncoderConfig(
-                embedding_dim=512,
-                input_channels=3,  # Adjust based on your EEG data's channel count
-                hidden_layers=(256, 512),
-                activation=Activation.relu
+        if self.model_name == ModelName.beatgans_ddpm:
+            self.model_type = ModelType.ddpm
+            self.model_conf = BeatGANsUNetConfig(
+                attention_resolutions=self.enc_attn,
+                channel_mult=self.enc_channel_mult,
+                conv_resample=True,
+                dims=2,
+                dropout=self.dropout,
+                embed_channels=self.beatgans_embed_channels,
+                image_size=self.img_size,
+                in_channels=3,
+                model_channels=self.net_ch,
+                num_classes=None,
+                num_head_channels=-1,
+                num_heads_upsample=-1,
+                num_heads=self.beatgans_attn_head,
+                num_res_blocks=self.net_num_res_blocks,
+                num_input_res_blocks=self.net_num_input_res_blocks,
+                out_channels=self.model_out_channels,
+                resblock_updown=self.net_resblock_updown,
+                use_checkpoint=self.beatgans_gradient_checkpoint,
+                use_new_attention_order=False,
+                resnet_two_cond=self.beatgans_resnet_two_cond,
+                resnet_use_zero_module=self.beatgans_resnet_use_zero_module,
             )
-        elif self.train_mode == TrainMode.conditional_ddim:
-            # Configuration for Conditional DDIM
-            return ConditionalDDIMConfig(
-                embedding_dim=512,
-                img_size=self.img_size,
-                output_channels=3,
-                hidden_layers=(256, 512, 1024),
-                activation=Activation.relu
+        elif self.model_name == ModelName.beatgans_autoenc:
+            self.model_type = ModelType.autoencoder
+            if self.latent_net_type == LatentNetType.none:
+                latent_net_conf = None
+            elif self.latent_net_type == LatentNetType.skip:
+                latent_net_conf = MLPSkipNetConfig(
+                    num_channels=self.style_ch,
+                    skip_layers=self.latent_skip_layers,
+                    num_hid_channels=self.latent_num_hid_channels,
+                    num_layers=self.latent_layers,
+                    num_time_emb_channels=self.latent_time_emb_channels,
+                    activation=self.latent_activation,
+                    use_norm=self.latent_use_norm,
+                    condition_bias=self.latent_condition_bias,
+                    dropout=self.latent_dropout,
+                    last_act=self.latent_net_last_act,
+                    num_time_layers=self.latent_num_time_layers,
+                    time_last_act=self.latent_time_last_act,
+                )
+            else:
+                raise NotImplementedError(f"LatentNetType '{self.latent_net_type}' is not supported.")
+    
+            self.model_conf = BeatGANsAutoencConfig(
+                attention_resolutions=self.enc_attn,
+                channel_mult=self.enc_channel_mult,
+                conv_resample=True,
+                dims=2,
+                dropout=self.dropout,
+                embed_channels=self.beatgans_embed_channels,
+                enc_out_channels=self.style_ch,
+                enc_pool=self.enc_pool,
+                enc_num_res_block=self.enc_num_res_blocks,
+                enc_channel_mult=self.enc_channel_mult,
+                enc_grad_checkpoint=self.enc_grad_checkpoint,
+                enc_attn_resolutions=self.enc_attn,
+                image_size=self.img_size,
+                in_channels=3,
+                model_channels=self.net_ch,
+                num_classes=None,
+                num_head_channels=-1,
+                num_heads_upsample=-1,
+                num_heads=self.beatgans_attn_head,
+                num_res_blocks=self.net_num_res_blocks,
+                num_input_res_blocks=self.net_num_input_res_blocks,
+                out_channels=self.model_out_channels,
+                resblock_updown=self.net_resblock_updown,
+                use_checkpoint=self.beatgans_gradient_checkpoint,
+                use_new_attention_order=False,
+                resnet_two_cond=self.beatgans_resnet_two_cond,
+                resnet_use_zero_module=self.beatgans_resnet_use_zero_module,
+                latent_net_conf=latent_net_conf,
+                resnet_cond_channels=self.beatgans_resnet_cond_channels,
             )
         else:
-            # Existing configurations for other modes
-            return self._make_diffusion_conf(self.T)
+            raise NotImplementedError(f"ModelName '{self.model_name}' is not supported.")
+    
+        return self.model_conf
+    
+    def make_validation_loader(self) -> DataLoader:
+        """
+        Create a DataLoader for validation.
+        """
+        val_dataset = self.make_validation_dataset()
+        return self.make_loader(
+            dataset=val_dataset,
+            shuffle=False,
+            drop_last=False,
+            batch_size=self.batch_size_eval,
+            parallel=self.parallel
+        )
+
+
+# ---------------------------
+# Additional Helper Classes
+# ---------------------------
+
+@dataclass
+class ModelConfig:
+    """
+    Base class for model configurations.
+    """
+    pass  # To be extended by specific model configurations
+
+
+@dataclass
+class BeatGANsUNetConfig(ModelConfig):
+    """
+    Configuration for BeatGANs UNet model.
+    """
+    attention_resolutions: Tuple[int, ...]
+    channel_mult: Tuple[int, ...]
+    conv_resample: bool
+    dims: int
+    dropout: float
+    embed_channels: int
+    image_size: int
+    in_channels: int
+    model_channels: int
+    num_classes: Optional[int]
+    num_head_channels: int
+    num_heads_upsample: int
+    num_heads: int
+    num_res_blocks: int
+    num_input_res_blocks: Optional[int]
+    out_channels: int
+    resblock_updown: bool
+    use_checkpoint: bool
+    use_new_attention_order: bool
+    resnet_two_cond: bool
+    resnet_use_zero_module: bool
+    resnet_cond_channels: Optional[int] = None
+
+
+@dataclass
+class BeatGANsAutoencConfig(ModelConfig):
+    """
+    Configuration for BeatGANs Autoencoder model.
+    """
+    attention_resolutions: Tuple[int, ...]
+    channel_mult: Tuple[int, ...]
+    conv_resample: bool
+    dims: int
+    dropout: float
+    embed_channels: int
+    enc_out_channels: int
+    enc_pool: str
+    enc_num_res_block: int
+    enc_channel_mult: Tuple[int, ...]
+    enc_grad_checkpoint: bool
+    enc_attn_resolutions: Tuple[int, ...]
+    image_size: int
+    in_channels: int
+    model_channels: int
+    num_classes: Optional[int]
+    num_head_channels: int
+    num_heads_upsample: int
+    num_heads: int
+    num_res_blocks: int
+    num_input_res_blocks: Optional[int]
+    out_channels: int
+    resblock_updown: bool
+    use_checkpoint: bool
+    use_new_attention_order: bool
+    resnet_two_cond: bool
+    resnet_use_zero_module: bool
+    latent_net_conf: Optional['MLPSkipNetConfig'] = None
+    resnet_cond_channels: Optional[int] = None
+
+
+@dataclass
+class MLPSkipNetConfig:
+    """
+    Configuration for MLP Skip Network.
+    """
+    num_channels: int
+    skip_layers: Optional[Tuple[int, ...]]
+    num_hid_channels: int
+    num_layers: int
+    num_time_emb_channels: int
+    activation: Activation
+    use_norm: bool
+    condition_bias: float
+    dropout: float
+    last_act: Optional[Activation]
+    num_time_layers: int
+    time_last_act: bool
+
+
+# ---------------------------
+# Dataset Classes
+# ---------------------------
+
+@dataclass
+class EEGDataset(Dataset):
+    """
+    Dataset class for EEG data (Semantic Encoder Training).
+    """
+    path: str
+    transform: Optional[callable] = None  # Add transforms if necessary
+    
+    def __len__(self):
+        # Implement length based on LMDB contents or data structure
+        return 0  # Placeholder
+    
+    def __getitem__(self, idx):
+        # Implement data retrieval from LMDB or other storage
+        return torch.tensor([])  # Placeholder
+
+
+@dataclass
+class ConditionalEEGImageDataset(Dataset):
+    """
+    Dataset class for Conditional DDIM Training (EEG + Image).
+    """
+    path: str
+    transform: Optional[callable] = None  # Add transforms if necessary
+    
+    def __len__(self):
+        # Implement length based on LMDB contents or data structure
+        return 0  # Placeholder
+    
+    def __getitem__(self, idx):
+        # Implement data retrieval from LMDB or other storage
+        eeg = torch.tensor([])  # Placeholder EEG data
+        image = torch.tensor([])  # Placeholder Image data
+        return eeg, image
+
+
+# ---------------------------
+# Data Paths
+# ---------------------------
+
+data_paths = {
+    'ffhqlmdb256': os.path.expanduser('datasets/ffhq256.lmdb'),
+    'eeg_encoder': os.path.expanduser('datasets/eeg_encoder.lmdb'),  # Added for encoder training
+    'eeg_ddim_ffhq': os.path.expanduser('datasets/eeg_ddim_ffhq.lmdb'),  # Added for DDIM training
+    'celeba': os.path.expanduser('datasets/celeba'),
+    'celebalmdb': os.path.expanduser('datasets/celeba.lmdb'),
+    'celebahq': os.path.expanduser('datasets/celebahq256.lmdb'),
+    'horse256': os.path.expanduser('datasets/horse256.lmdb'),
+    'bedroom256': os.path.expanduser('datasets/bedroom256.lmdb'),
+    'celeba_anno': os.path.expanduser('datasets/celeba_anno/list_attr_celeba.txt'),
+    'celebahq_anno': os.path.expanduser('datasets/celeba_anno/CelebAMask-HQ-attribute-anno.txt'),
+    'celeba_relight': os.path.expanduser('datasets/celeba_hq_light/celeba_light.txt'),
+}
+
+def use_cached_dataset_path(original_path: str, cache_dir: str) -> str:
+    """
+    Function to determine the cached dataset path.
+    """
+    # Implement caching logic if necessary
+    return original_path  # Placeholder
+
+
+# ---------------------------
+# Activation Enum
+# ---------------------------
+
+class Activation(Enum):
+    relu = auto()
+    silu = auto()
+    leaky_relu = auto()
+    tanh = auto()
+    sigmoid = auto()
+    none = auto()
+    # Add other activations as needed
+
+
+# ---------------------------
+# Additional Helper Functions
+# ---------------------------
+
+def make_transform(img_size: int, flip_prob: float = 0.5, crop_d2c: bool = False):
+    """
+    Create a transformation pipeline for images.
+    """
+    import torchvision.transforms as transforms
+    transform_list = []
+    if crop_d2c:
+        # Implement specific cropping if required
+        pass  # Placeholder
+    transform_list.append(transforms.Resize(img_size))
+    transform_list.append(transforms.CenterCrop(img_size))
+    transform_list.append(transforms.ToTensor())
+    if flip_prob > 0:
+        transform_list.append(transforms.RandomHorizontalFlip(p=flip_prob))
+    return transforms.Compose(transform_list)
+
+
+# ---------------------------
+# Utility Classes and Enums
+# ---------------------------
+
+class ModelName(Enum):
+    beatgans_ddpm = auto()
+    beatgans_autoenc = auto()
+    # Add other model names as necessary
+
+
+class ModelType(Enum):
+    ddpm = auto()
+    autoencoder = auto()
+    # Add other model types as necessary
+
+
+# ---------------------------
+# Beta Schedule Function
+# ---------------------------
+
+def get_named_beta_schedule(schedule_name: str, num_timesteps: int) -> List[float]:
+    """
+    Return a list of betas for a given named beta schedule.
+    """
+    if schedule_name == "linear":
+        return list(torch.linspace(0.0001, 0.02, num_timesteps).numpy())
+    elif schedule_name == "cosine":
+        # Implement cosine schedule if necessary
+        raise NotImplementedError("Cosine schedule is not implemented.")
+    else:
+        raise NotImplementedError(f"Beta schedule '{schedule_name}' is not supported.")
