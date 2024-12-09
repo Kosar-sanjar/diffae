@@ -14,6 +14,7 @@ from torch.cuda import amp
 from torch.optim.optimizer import Optimizer
 from torch.utils.data.dataset import TensorDataset
 from torchvision.utils import make_grid, save_image
+from tqdm import tqdm
 
 from config import TrainConfig
 from dataset import EEGDataset, ConditionalEEGImageDataset, data_paths
@@ -344,7 +345,7 @@ class LitModel(pl.LightningModule):
                 # Update EMA for the entire model
                 ema(self.model, self.ema_model, self.conf.ema_decay)
 
-            # Log samples and evaluate scores
+            # Log samples and evaluate metrics
             if self.conf.train_mode.require_dataset_infer():
                 imgs = None
             else:
@@ -657,105 +658,7 @@ class LitModel(pl.LightningModule):
                 for k, v in score.items():
                     self.log(f'{k}_inv_ema_T{T}', v)
 
-    def ema(source, target, decay):
-        """
-        Update the EMA (Exponential Moving Average) of the model parameters.
-        """
-        source_dict = source.state_dict()
-        target_dict = target.state_dict()
-        for key in source_dict.keys():
-            target_dict[key].data.copy_(target_dict[key].data * decay + source_dict[key].data * (1 - decay))
 
-    class WarmupLR:
-        def __init__(self, warmup) -> None:
-            self.warmup = warmup
-
-        def __call__(self, step):
-            return min(step, self.warmup) / self.warmup
-
-    def is_time(num_samples, every, step_size):
-        """
-        Determine if it's time to perform an action based on the number of samples processed.
-        """
-        closest = (num_samples // every) * every
-        return num_samples - closest < step_size
-
-    def train(conf: TrainConfig, gpus, nodes=1, mode: str = 'train'):
-        """
-        Orchestrate the training and evaluation process.
-        """
-        print(f'Configuration: {conf.name}')
-        model = LitModel(conf)
-
-        os.makedirs(conf.logdir, exist_ok=True)
-        checkpoint_callback = ModelCheckpoint(
-            dirpath=conf.logdir,
-            save_last=True,
-            save_top_k=1,
-            every_n_train_steps=conf.save_every_samples // conf.batch_size_effective
-        )
-        checkpoint_path = os.path.join(conf.logdir, 'last.ckpt')
-        print(f'Checkpoint path: {checkpoint_path}')
-        if os.path.exists(checkpoint_path):
-            resume = checkpoint_path
-            print('Resuming from the last checkpoint...')
-        else:
-            resume = conf.continue_from.path if conf.continue_from is not None else None
-
-        tb_logger = pl_loggers.TensorBoardLogger(save_dir=conf.logdir, name=None, version='')
-
-        # Configure plugins for distributed training
-        plugins = []
-        if len(gpus) > 1 or nodes > 1:
-            accelerator = 'ddp'
-            from pytorch_lightning.plugins import DDPPlugin
-            plugins.append(DDPPlugin(find_unused_parameters=False))
-        else:
-            accelerator = None
-
-        trainer = pl.Trainer(
-            max_steps=conf.total_samples // conf.batch_size_effective,
-            resume_from_checkpoint=resume,
-            gpus=gpus,
-            num_nodes=nodes,
-            accelerator=accelerator,
-            precision=16 if conf.fp16 else 32,
-            callbacks=[checkpoint_callback, LearningRateMonitor(logging_interval='step')],
-            logger=tb_logger,
-            accumulate_grad_batches=conf.accum_batches,
-            plugins=plugins,
-            replace_sampler_ddp=True,
-        )
-
-        if mode == 'train':
-            trainer.fit(model)
-        elif mode == 'eval':
-            # Load the latest checkpoint for evaluation
-            dummy_loader = DataLoader(TensorDataset(torch.zeros(conf.batch_size)), batch_size=conf.batch_size)
-            eval_path = conf.eval_path or checkpoint_path
-            print(f'Loading checkpoint from: {eval_path}')
-            state = torch.load(eval_path, map_location='cpu')
-            print(f'Checkpoint step: {state["global_step"]}')
-            model.load_state_dict(state['state_dict'])
-            trainer.test(model, dataloaders=dummy_loader)
-
-            if get_rank() == 0:
-                # Log evaluation results
-                for k, v in trainer.callback_metrics.items():
-                    tb_logger.experiment.add_scalar(k, v, state['global_step'] * conf.batch_size_effective)
-
-                # Save evaluation results to a file
-                eval_file = f'evals/{conf.name}.txt'
-                os.makedirs(os.path.dirname(eval_file), exist_ok=True)
-                with open(eval_file, 'a') as f:
-                    metrics = {k: v.item() for k, v in trainer.callback_metrics.items()}
-                    metrics['num_samples'] = state['global_step'] * conf.batch_size_effective
-                    f.write(json.dumps(metrics) + "\n")
-        else:
-            raise NotImplementedError(f"Unsupported mode: {mode}")
-
-
-# Utility functions
 def ema(source, target, decay):
     """
     Update the EMA (Exponential Moving Average) of the model parameters.
@@ -780,3 +683,78 @@ def is_time(num_samples, every, step_size):
     """
     closest = (num_samples // every) * every
     return num_samples - closest < step_size
+
+
+def train(conf: TrainConfig, gpus, nodes=1, mode: str = 'train'):
+    """
+    Orchestrate the training and evaluation process.
+    """
+    print(f'Configuration: {conf.name}')
+    model = LitModel(conf)
+
+    os.makedirs(conf.logdir, exist_ok=True)
+    checkpoint_callback = ModelCheckpoint(
+        dirpath=conf.logdir,
+        save_last=True,
+        save_top_k=1,
+        every_n_train_steps=conf.save_every_samples // conf.batch_size_effective
+    )
+    checkpoint_path = os.path.join(conf.logdir, 'last.ckpt')
+    print(f'Checkpoint path: {checkpoint_path}')
+    if os.path.exists(checkpoint_path):
+        resume = checkpoint_path
+        print('Resuming from the last checkpoint...')
+    else:
+        resume = conf.continue_from.path if conf.continue_from is not None else None
+
+    tb_logger = pl_loggers.TensorBoardLogger(save_dir=conf.logdir, name=None, version='')
+
+    # Configure plugins for distributed training
+    plugins = []
+    if len(gpus) > 1 or nodes > 1:
+        accelerator = 'ddp'
+        from pytorch_lightning.plugins import DDPPlugin
+        plugins.append(DDPPlugin(find_unused_parameters=False))
+    else:
+        accelerator = None
+
+    trainer = pl.Trainer(
+        max_steps=conf.total_samples // conf.batch_size_effective,
+        resume_from_checkpoint=resume,
+        gpus=gpus,
+        num_nodes=nodes,
+        accelerator=accelerator,
+        precision=16 if conf.fp16 else 32,
+        callbacks=[checkpoint_callback, LearningRateMonitor(logging_interval='step')],
+        logger=tb_logger,
+        accumulate_grad_batches=conf.accum_batches,
+        plugins=plugins,
+        replace_sampler_ddp=True,
+    )
+
+    if mode == 'train':
+        trainer.fit(model)
+    elif mode == 'eval':
+        # Load the latest checkpoint for evaluation
+        dummy_loader = DataLoader(TensorDataset(torch.zeros(conf.batch_size)), batch_size=conf.batch_size)
+        eval_path = conf.eval_path or checkpoint_path
+        print(f'Loading checkpoint from: {eval_path}')
+        state = torch.load(eval_path, map_location='cpu')
+        print(f'Checkpoint step: {state["global_step"]}')
+        model.load_state_dict(state['state_dict'])
+        trainer.test(model, dataloaders=dummy_loader)
+
+        if get_rank() == 0:
+            # Log evaluation results
+            for k, v in trainer.callback_metrics.items():
+                tb_logger.experiment.add_scalar(k, v, state['global_step'] * conf.batch_size_effective)
+
+            # Save evaluation results to a file
+            eval_file = f'evals/{conf.name}.txt'
+            os.makedirs(os.path.dirname(eval_file), exist_ok=True)
+            with open(eval_file, 'a') as f:
+                metrics = {k: v.item() for k, v in trainer.callback_metrics.items()}
+                metrics['num_samples'] = state['global_step'] * conf.batch_size_effective
+                f.write(json.dumps(metrics) + "\n")
+    else:
+        raise NotImplementedError(f"Unsupported mode: {mode}")
