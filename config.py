@@ -21,6 +21,7 @@ from multiprocessing import get_context
 from dataset_util import *
 from torch.utils.data.distributed import DistributedSampler
 
+# Define data paths
 data_paths = {
     'ffhqlmdb256': os.path.expanduser('datasets/ffhq256.lmdb'),
     # used for training a classifier
@@ -40,11 +41,11 @@ class PretrainConfig(BaseConfig):
     name: str
     path: str
 
-# Define separate configuration classes for Semantic Encoder and Conditional DDIM
+# Separate configuration classes for Semantic Encoder and Conditional DDIM
 @dataclass
 class SemanticEncoderConfig:
     embedding_dim: int
-    input_channels: int = 3  # Example parameter, adjust as needed
+    input_channels: int = 3  # Adjust based on your EEG data's channel count
     hidden_layers: Tuple[int] = (256, 512)  # Example hidden layers
     activation: Activation = Activation.relu  # Example activation
 
@@ -56,7 +57,6 @@ class SemanticEncoderConfig:
             hidden_layers=self.hidden_layers,
             activation=self.activation.get_act()
         )
-
 
 @dataclass
 class ConditionalDDIMConfig:
@@ -75,7 +75,6 @@ class ConditionalDDIMConfig:
             hidden_layers=self.hidden_layers,
             activation=self.activation.get_act()
         )
-
 
 @dataclass
 class TrainConfig(BaseConfig):
@@ -330,25 +329,29 @@ class TrainConfig(BaseConfig):
         # Latent can have different eval T
         return self._make_latent_diffusion_conf(T=self.latent_T_eval)
 
-    def make_dataset(self, path=None, **kwargs):
+    def make_dataset(self, path=None, split='train', **kwargs):
         if self.data_name == 'ffhqlmdb256':
             return FFHQlmdb(path=path or self.data_path,
                             image_size=self.img_size,
+                            split=split,
                             **kwargs)
         elif self.data_name == 'horse256':
             return Horse_lmdb(path=path or self.data_path,
                               image_size=self.img_size,
+                              split=split,
                               **kwargs)
         elif self.data_name == 'bedroom256':
-            return Horse_lmdb(path=path or self.data_path,
-                              image_size=self.img_size,
-                              **kwargs)
+            return Bedroom_lmdb(path=path or self.data_path,
+                                image_size=self.img_size,
+                                split=split,
+                                **kwargs)
         elif self.data_name == 'celebalmdb':
             # Always use d2c crop
             return CelebAlmdb(path=path or self.data_path,
                               image_size=self.img_size,
                               original_resolution=None,
                               crop_d2c=True,
+                              split=split,
                               **kwargs)
         else:
             raise NotImplementedError()
@@ -379,15 +382,19 @@ class TrainConfig(BaseConfig):
             multiprocessing_context=get_context('fork'),
         )
 
-    def make_semantic_encoder_dataset(self):
+    def make_semantic_encoder_dataset(self, split='train'):
         """
         Initialize the dataset for Semantic Encoder training.
         Limits to `max_train_samples` for training and `max_val_samples` for validation.
         """
-        dataset = EEGEncoderDataset(self.semantic_encoder_lmdb)
-        if self.max_train_samples:
+        dataset = EEGEncoderDataset(self.semantic_encoder_lmdb, split=split)
+        if split == 'train' and self.max_train_samples:
             # Select the first `max_train_samples` samples for training
             indices = list(range(min(self.max_train_samples, len(dataset))))
+            dataset = Subset(dataset, indices)
+        elif split == 'val' and self.max_val_samples:
+            # Select the first `max_val_samples` samples for validation
+            indices = list(range(min(self.max_val_samples, len(dataset))))
             dataset = Subset(dataset, indices)
         return dataset
 
@@ -397,9 +404,13 @@ class TrainConfig(BaseConfig):
         Limits to `max_train_samples` for training and `max_val_samples` for validation.
         """
         dataset = ConditionalDDIMDataset(self.conditional_ddim_lmdb, split=split)
-        if self.max_train_samples:
+        if split == 'train' and self.max_train_samples:
             # Select the first `max_train_samples` samples for training
             indices = list(range(min(self.max_train_samples, len(dataset))))
+            dataset = Subset(dataset, indices)
+        elif split == 'val' and self.max_val_samples:
+            # Select the first `max_val_samples` samples for validation
+            indices = list(range(min(self.max_val_samples, len(dataset))))
             dataset = Subset(dataset, indices)
         return dataset
 
