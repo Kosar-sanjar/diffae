@@ -75,6 +75,59 @@ class LitModel(pl.LightningModule):
             model_size += param.data.nelement()
         print('Model params: %.2f M' % (model_size / 1024 / 1024))
 
+        def make_model_conf(self):
+    """
+    Create model configuration based on the training mode.
+    """
+    if self.train_mode == TrainMode.SEMANTIC_ENCODER:
+        # Configuration for Semantic Encoder
+        return SemanticEncoderConfig(
+            embedding_dim=self.style_ch,  # Example parameter
+            # Add other Semantic Encoder specific configurations here
+        )
+    elif self.train_mode == TrainMode.CONDITIONAL_DDIM:
+        # Configuration for Conditional DDIM
+        return ConditionalDDIMConfig(
+            embedding_dim=self.style_ch,  # Example parameter
+            # Add other Conditional DDIM specific configurations here
+        )
+    else:
+        # Existing configurations for other training modes
+        if self.model_name == ModelName.beatgans_ddpm:
+            self.model_type = ModelType.ddpm
+            self.model_conf = BeatGANsUNetConfig(
+                attention_resolutions=self.net_attn,
+                channel_mult=self.net_ch_mult,
+                conv_resample=True,
+                dims=2,
+                dropout=self.dropout,
+                embed_channels=self.net_beatgans_embed_channels,
+                image_size=self.img_size,
+                in_channels=3,
+                model_channels=self.net_ch,
+                num_classes=None,
+                num_head_channels=-1,
+                num_heads_upsample=-1,
+                num_heads=self.net_beatgans_attn_head,
+                num_res_blocks=self.net_num_res_blocks,
+                num_input_res_blocks=self.net_num_input_res_blocks,
+                out_channels=self.model_out_channels,
+                resblock_updown=self.net_resblock_updown,
+                use_checkpoint=self.net_beatgans_gradient_checkpoint,
+                use_new_attention_order=False,
+                resnet_two_cond=self.net_beatgans_resnet_two_cond,
+                resnet_use_zero_module=self.net_beatgans_resnet_use_zero_module,
+            )
+        elif self.model_name in [ModelName.beatgans_autoenc]:
+            # Existing configurations for autoencoder models
+            # ...
+            pass
+        else:
+            raise NotImplementedError(self.model_name)
+    
+        return self.model_conf
+
+
         # Initialize Samplers based on Training Mode
         if self.conf.train_mode == TrainMode.CONDITIONAL_DDIM:
             self.sampler = conf.make_conditional_diffusion_conf().make_sampler()
