@@ -1,5 +1,3 @@
-# config.py
-
 from enum import Enum, auto
 from dataclasses import dataclass, field
 from choices import TrainMode, ModelType  # Import TrainMode and ModelType
