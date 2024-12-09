@@ -243,18 +243,6 @@ def ffhq128_ddpm_130M():
     return conf
 
 
-def ffhq128_autoenc_130M():
-    """
-    Configuration for FFHQ dataset with image size 128, Autoencoder training, and 130M total samples.
-    """
-    conf = ffhq128_autoenc_base()
-    conf.total_samples = 130_000_000
-    conf.eval_ema_every_samples = 10_000_000
-    conf.eval_every_samples = 10_000_000
-    conf.name = 'ffhq128_autoenc_130M'
-    return conf
-
-
 def horse128_ddpm():
     """
     Configuration for Horse dataset with image size 128 and DDPM training.
@@ -332,17 +320,67 @@ def pretrain_ffhq128_autoenc72M():
     conf.latent_infer_path = f'checkpoints/{conf.name}/latent.pkl'
     return conf
 
+def ffhq128_autoenc_130M():
+    """
+    Configuration for FFHQ dataset with image size 128 and Autoencoder training.
+    """
+    conf = TrainConfig()
+    conf.batch_size = 32
+    conf.beatgans_gen_type = GenerativeType.ddim
+    conf.beta_scheduler = 'linear'
+    conf.data_name = 'eeg_encoder'  # Dataset name for encoder
+    conf.diffusion_type = 'beatgans'
+    conf.eval_ema_every_samples = 200_000
+    conf.eval_every_samples = 200_000
+    conf.fp16 = True
+    conf.lr = 1e-4
+    conf.model_name = ModelName.beatgans_autoenc  # Maps to ModelType.autoencoder
+    conf.net_attn = (16,)
+    conf.net_beatgans_attn_head = 1
+    conf.net_beatgans_embed_channels = 512
+    conf.net_beatgans_resnet_two_cond = True
+    conf.net_ch_mult = (1, 2, 4, 8)
+    conf.net_ch = 64
+    conf.net_enc_channel_mult = (1, 2, 4, 8, 8)
+    conf.net_enc_pool = 'adaptivenonzero'
+    conf.sample_size = 32
+    conf.T_eval = 20
+    conf.T = 1000
+    conf.train_mode = TrainMode.diffusion  # Set based on training objective
+    conf.make_model_conf()
+    conf.name = 'ffhq128_autoenc_130M'
+    conf.scale_up_gpus(num_gpus=4)
+    return conf
 
-def pretrain_ffhq128_autoenc130M():
+def ffhq128_autoenc_latent():
     """
-    Pretraining configuration for FFHQ dataset with image size 128, Autoencoder training, and 130M total samples.
+    Configuration for FFHQ dataset with image size 128 and Latent DPM training.
     """
-    conf = ffhq128_autoenc_130M()
-    conf.pretrain = PretrainConfig(
-        name='130M',
-        path=f'checkpoints/{conf.name}/last.ckpt',
-    )
-    conf.latent_infer_path = f'checkpoints/{conf.name}/latent.pkl'
+    conf = TrainConfig()
+    conf.batch_size = 32
+    conf.beatgans_gen_type = GenerativeType.ddim
+    conf.beta_scheduler = 'linear'
+    conf.data_name = 'ffhqlmdb256'  # Dataset name for latent diffusion
+    conf.diffusion_type = 'beatgans'
+    conf.eval_ema_every_samples = 200_000
+    conf.eval_every_samples = 200_000
+    conf.fp16 = True
+    conf.lr = 1e-4
+    conf.model_name = ModelName.beatgans_ddpm  # Maps to ModelType.ddpm
+    conf.net_attn = (16,)
+    conf.net_beatgans_attn_head = 1
+    conf.net_beatgans_embed_channels = 512
+    conf.net_ch_mult = (1, 1, 2, 3, 4)
+    conf.net_ch = 128
+    conf.net_enc_channel_mult = (1, 1, 2, 3, 4, 4)
+    conf.net_enc_pool = 'adaptivenonzero'
+    conf.sample_size = 32
+    conf.T_eval = 20
+    conf.T = 1000
+    conf.train_mode = TrainMode.latent_diffusion  # Set to latent diffusion mode
+    conf.scale_up_gpus(num_gpus=1)
+    conf.make_model_conf()
+    conf.name = 'ffhq128_autoenc_latent'
     return conf
 
 
