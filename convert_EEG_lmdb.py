@@ -1,5 +1,3 @@
-# convert_EEG_lmdb.py
-
 import os
 import torch
 import torch.backends.cudnn as cudnn
@@ -8,6 +6,11 @@ import multiprocessing
 import lmdb
 from tqdm import tqdm
 import pickle
+from PIL import Image
+import logging
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # Enable benchmark mode in cuDNN for optimized performance
 cudnn.benchmark = True
@@ -121,83 +124,62 @@ def prepare_indices(dataset, test_samples_per_label=3):
 train_index, test_index = prepare_indices(dataset)
 
 # Processing Functions for LMDB Entries
-def process_data_encoder(index_and_i):
+def process_data_encoder(i, index):
     """
-    Process and store EEG data for the Semantic Encoder LMDB.
+    Process and serialize EEG data for the Semantic Encoder LMDB.
     """
-    i, index = index_and_i
     eeg_tensor, _ = dataset[index]  # Retrieve EEG and label (label unused here)
-
-    # Convert EEG tensor to NumPy array
     eeg_np = eeg_tensor.numpy()
-
-    # Apply moving average along the time axis
-    eeg_ma = np.apply_along_axis(
-        lambda arr: moving_average(arr, WINDOW_SIZE),
-        axis=1,
-        arr=eeg_np
-    )
-
-    # Serialize the processed EEG data
+    eeg_ma = moving_average(eeg_np, WINDOW_SIZE)
     serialized_data = bytearray(pickle.dumps(eeg_ma))
-
-    # Generate a unique key for LMDB entry
     key = f"data-{str(i).zfill(5)}".encode("utf-8")
+    return key, serialized_data
 
-    # Store the serialized data in LMDB
-    with env_encoder.begin(write=True) as txn:
-        txn.put(key, serialized_data)
-
-def process_data_ddim(index_and_i):
+def process_data_ddim(i, index):
     """
-    Process and store EEG data along with corresponding images for the Conditional DDIM LMDB.
+    Process and serialize EEG data along with corresponding images for the Conditional DDIM LMDB.
     """
-    i, index = index_and_i
     eeg_tensor, label = dataset[index]
-
-    # Convert EEG tensor to NumPy array
     eeg_np = eeg_tensor.numpy()
-
-    # Apply moving average along the time axis
-    eeg_ma = np.apply_along_axis(
-        lambda arr: moving_average(arr, WINDOW_SIZE),
-        axis=1,
-        arr=eeg_np
-    )
-
+    eeg_ma = moving_average(eeg_np, WINDOW_SIZE)
+    
     # Retrieve corresponding image and subject information
-    image = dataset.data[index]["image"]  # Assuming 'image' is a PIL Image or similar object
+    image = dataset.data[index]["image"]  # Ensure 'image' is a PIL Image or convert it
     subject = dataset.data[index]["subject"]
-
-    # Create a dictionary to store EEG data, image, label, and subject
+    
+    # Ensure image is in PIL format
+    if not isinstance(image, Image.Image):
+        image = Image.fromarray(image)
+    
+    # Optionally, convert image to a standardized format (e.g., RGB)
+    image = image.convert("RGB")
+    
     store_data = {
         "data": eeg_ma,      # Processed EEG data
         "image": image,      # Corresponding image
         "label": label,      # Label
         "subject": subject   # Subject ID
     }
-
-    # Serialize the dictionary
     serialized_data = bytearray(pickle.dumps(store_data))
-
-    # Generate a unique key for LMDB entry
     key = f"data-{str(i).zfill(5)}".encode("utf-8")
+    return key, serialized_data
 
-    # Store the serialized data in LMDB
-    with env_ddim.begin(write=True) as txn:
-        txn.put(key, serialized_data)
-
-# Function to Populate LMDB Databases
-def prepare_lmdb(env, selected_indices, process_func, n_workers=1):
+# Function to Populate LMDB Databases Sequentially
+def prepare_lmdb_sequential(env, selected_indices, process_func):
     """
-    Populate the LMDB database with processed data.
-    """
-    with multiprocessing.Pool(n_workers) as pool:
-        list(tqdm(pool.imap(process_func, enumerate(selected_indices)), total=len(selected_indices)))
+    Populate the LMDB database with processed data sequentially.
 
-    # Store the length of the dataset in LMDB for reference
+    Args:
+        env (lmdb.Environment): The LMDB environment to populate.
+        selected_indices (list): List of dataset indices to process.
+        process_func (function): Function to process each data point.
+    """
     with env.begin(write=True) as txn:
-        txn.put("length".encode("utf-8"), str(len(selected_indices)).encode("utf-8"))
+        for i, index in tqdm(enumerate(selected_indices), total=len(selected_indices), desc="Writing LMDB"):
+            key, serialized_data = process_func(i, index)
+            txn.put(key, serialized_data)
+    env.put("length".encode("utf-8"), str(len(selected_indices)).encode("utf-8"))
+    logging.info(f"LMDB populated with {len(selected_indices)} entries.")
 
 # Main Execution Block
 if __name__ == "__main__":
@@ -217,15 +199,18 @@ if __name__ == "__main__":
     env_ddim = lmdb.open(DDIM_LMDB_PATH, map_size=1024**4, readahead=False)
 
     try:
+        # Preprocess data in parallel (optional)
+        # Consider implementing a producer-consumer pattern if preprocessing is time-consuming
+
         # Populate Semantic Encoder LMDB with training data
-        print("Populating Semantic Encoder LMDB with training data...")
-        prepare_lmdb(env_encoder, train_index, process_data_encoder, n_workers=num_workers)
-        print("Semantic Encoder LMDB populated successfully.")
+        logging.info("Populating Semantic Encoder LMDB with training data...")
+        prepare_lmdb_sequential(env_encoder, train_index, process_data_encoder)
+        logging.info("Semantic Encoder LMDB populated successfully.")
 
         # Populate Conditional DDIM LMDB with training data
-        print("Populating Conditional DDIM LMDB with training data...")
-        prepare_lmdb(env_ddim, train_index, process_data_ddim, n_workers=num_workers)
-        print("Conditional DDIM LMDB populated successfully.")
+        logging.info("Populating Conditional DDIM LMDB with training data...")
+        prepare_lmdb_sequential(env_ddim, train_index, process_data_ddim)
+        logging.info("Conditional DDIM LMDB populated successfully.")
 
         # Optional: Populate Test LMDBs
         # Uncomment the following block if you decide to create test LMDBs in the future
@@ -246,13 +231,13 @@ if __name__ == "__main__":
         env_test_ddim = lmdb.open(TEST_DDIM_LMDB_PATH, map_size=1024**4, readahead=False)
 
         # Populate Test LMDBs
-        print("Populating Semantic Encoder Test LMDB with test data...")
-        prepare_lmdb(env_test_encoder, test_index, process_data_encoder, n_workers=num_workers)
-        print("Semantic Encoder Test LMDB populated successfully.")
+        logging.info("Populating Semantic Encoder Test LMDB with test data...")
+        prepare_lmdb_sequential(env_test_encoder, test_index, process_data_encoder)
+        logging.info("Semantic Encoder Test LMDB populated successfully.")
 
-        print("Populating Conditional DDIM Test LMDB with test data...")
-        prepare_lmdb(env_test_ddim, test_index, process_data_ddim, n_workers=num_workers)
-        print("Conditional DDIM Test LMDB populated successfully.")
+        logging.info("Populating Conditional DDIM Test LMDB with test data...")
+        prepare_lmdb_sequential(env_test_ddim, test_index, process_data_ddim)
+        logging.info("Conditional DDIM Test LMDB populated successfully.")
 
         # Close Test LMDB environments
         env_test_encoder.close()
@@ -264,4 +249,4 @@ if __name__ == "__main__":
         env_encoder.close()
         env_ddim.close()
 
-    print("All LMDB databases have been successfully created.")
+    logging.info("All LMDB databases have been successfully created.")
