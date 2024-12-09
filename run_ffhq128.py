@@ -1,30 +1,47 @@
+# run_training.py
+
 from templates import *
-from templates_latent import *
+from choices import TrainMode  # Import TrainMode from choices.py
+# from templates_latent import *  # Deprecated; remove or comment out
+import torch
+
+def main():
+    # ---------------------------
+    # Step 1: Train the Autoencoder (Semantic Encoder)
+    # ---------------------------
+    print("Step 1: Training the Autoencoder (Semantic Encoder)")
+    gpus_encoder = [0, 1, 2, 3]  # Adjust based on available GPUs
+    conf_encoder = ffhq128_autoenc_130M()
+    # conf_encoder.train_mode is already set in ffhq128_autoenc_130M()
+    train(conf_encoder, gpus=gpus_encoder)
+    
+    # ---------------------------
+    # Step 2: Infer Latents for Latent DPM Training
+    # ---------------------------
+    print("Step 2: Inferring Latents for Latent DPM Training")
+    gpus_infer = [0, 1, 2, 3]  # Can utilize multiple GPUs for faster inference
+    conf_infer = ffhq128_autoenc_130M()  # Use the same configuration as encoder
+    # conf_infer.train_mode is already set in ffhq128_autoenc_130M()
+    conf_infer.eval_programs = ['infer']  # Specify the inference program
+    train(conf_infer, gpus=gpus_infer, mode='eval')
+    
+    # ---------------------------
+    # Step 3: Train the Latent DPM
+    # ---------------------------
+    print("Step 3: Training the Latent DPM")
+    gpus_latent = [0]  # Typically requires fewer resources
+    conf_latent = ffhq128_autoenc_latent()  # Define a separate configuration for latent training
+    # conf_latent.train_mode is already set in ffhq128_autoenc_latent()
+    train(conf_latent, gpus=gpus_latent)
+    
+    # ---------------------------
+    # Step 4: Unconditional Sampling and Evaluation
+    # ---------------------------
+    print("Step 4: Unconditional Sampling and Evaluation")
+    gpus_eval = [0, 1, 2, 3]  # Utilize multiple GPUs for efficiency
+    conf_eval = ffhq128_autoenc_latent()  # Use the same latent configuration
+    conf_eval.eval_programs = ['fid(10,10)']  # Specify the evaluation program
+    train(conf_eval, gpus=gpus_eval, mode='eval')
 
 if __name__ == '__main__':
-    # train the autoenc moodel
-    # this requires V100s.
-    # gpus = [0, 1, 2, 3]
-    gpus = [0]
-    conf = ffhq128_autoenc_130M()
-    train(conf, gpus=gpus)
-
-    # infer the latents for training the latent DPM
-    # NOTE: not gpu heavy, but more gpus can be of use!
-    # gpus = [0, 1, 2, 3]
-    gpus = [0]
-    conf.eval_programs = ['infer']
-    train(conf, gpus=gpus, mode='eval')
-
-    # train the latent DPM
-    # NOTE: only need a single gpu
-    # gpus = [0]
-    # conf = ffhq128_autoenc_latent()
-    # train(conf, gpus=gpus)
-
-    # # unconditional sampling score
-    # # NOTE: a lot of gpus can speed up this process
-    # # gpus = [0, 1, 2, 3]
-    # gpus = [0]
-    # conf.eval_programs = ['fid(10,10)']
-    # train(conf, gpus=gpus, mode='eval')
+    main()
