@@ -1,3 +1,5 @@
+# dataset.py
+
 import os
 from io import BytesIO
 from pathlib import Path
@@ -13,6 +15,10 @@ import pandas as pd
 import torchvision.transforms.functional as Ftrans
 import numpy as np
 import pickle
+import logging
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 
 class ImageDataset(Dataset):
@@ -70,6 +76,7 @@ class ImageDataset(Dataset):
             img = self.transform(img)
         return {'img': img, 'index': index}
 
+
 class EEGImageDataset(Dataset):
     def __init__(
         self,
@@ -108,7 +115,6 @@ class EEGImageDataset(Dataset):
         if self.transform is not None:
             img = self.transform(img)
         return {'img': img, 'index': index}
-
 
 
 class NumpyDataset(Dataset):
@@ -176,7 +182,7 @@ class BaseLMDB(Dataset):
             # key = f'{self.original_resolution}-{str(index).zfill(self.zfill)}'.encode(
             #     'utf-8')
             key = f'data-{str(index).zfill(self.zfill)}'.encode('utf-8')
-            
+
             img_bytes = txn.get(key)
 
         # 3d (RGB) eeg input
@@ -185,7 +191,7 @@ class BaseLMDB(Dataset):
         # scaled_data = normalized_data * 255
         # integer_data = scaled_data.astype(np.uint8)
         # img = Image.fromarray(integer_data,"RGB")
-        
+
         # 2d (RGB) eeg input 128x128
         # buffer = np.frombuffer(img_bytes).reshape((128,128))
         # normalized_data = (buffer - np.min(buffer)) / (np.max(buffer) - np.min(buffer))
@@ -203,14 +209,14 @@ class BaseLMDB(Dataset):
         # 2d (RGB) eeg input 128x440 not image it
         buffer = np.array(pickle.loads(img_bytes))
         # buffer = np.frombuffer(img_bytes).reshape((128,400))
-        
+
         # normalized_data = (buffer - np.min(buffer)) / (np.max(buffer) - np.min(buffer))
         # normalized_data = buffer - np.min(buffer)
         # scaled_data = normalized_data * 1
         integer_data = buffer.astype(np.float32)
         # img = Image.fromarray(integer_data)
         return integer_data
-        
+
         # img = Image.fromarray(buffer,"RGB")
 
         # return img
@@ -239,7 +245,6 @@ def make_transform(
     # transform.append(transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)))
     transform = transforms.Compose(transform)
     return transform
-
 
 
 class FFHQlmdb(Dataset):
@@ -326,7 +331,7 @@ class CelebAlmdb(Dataset):
     """
     def __init__(self,
                  path,
-                 image_size,
+                 image_size=64,
                  original_resolution=128,
                  split=None,
                  as_tensor: bool = True,
@@ -395,7 +400,7 @@ class Horse_lmdb(Dataset):
             # transforms.CenterCrop(image_size),
         ]
         # if do_augment:
-            # transform.append(transforms.RandomHorizontalFlip())
+        #     transform.append(transforms.RandomHorizontalFlip())
         if do_transform:
             transform.append(transforms.ToTensor())
         # if do_normalize:
@@ -573,6 +578,7 @@ class CelebD2CAttrDataset(CelebAttrDataset):
 
 
 class CelebAttrFewshotDataset(Dataset):
+
     def __init__(
         self,
         cls_name,
@@ -817,3 +823,130 @@ class Repeat(Dataset):
     def __getitem__(self, index):
         index = index % self.original_len
         return self.dataset[index]
+
+
+# ==================== New Dataset Classes for EEG Integration ====================
+
+class EEGEncoderDataset(Dataset):
+    """
+    Dataset class for training the Semantic Encoder with EEG data only.
+    """
+    def __init__(self, encoder_lmdb_path: str, transform: Optional[Callable] = None):
+        """
+        Initialize the EEGEncoderDataset.
+
+        Args:
+            encoder_lmdb_path (str): Path to the 'eeg_encoder.lmdb' database.
+            transform (Optional[Callable]): Transformations to apply (unused here).
+        """
+        super().__init__()
+        self.lmdb_path = encoder_lmdb_path
+        if not os.path.exists(self.lmdb_path):
+            raise FileNotFoundError(f"LMDB path {self.lmdb_path} does not exist.")
+        self.env = lmdb.open(
+            self.lmdb_path,
+            readonly=True,
+            lock=False,
+            readahead=False,
+            meminit=False
+        )
+        with self.env.begin(write=False) as txn:
+            self.length = int(txn.get(b'length').decode('utf-8'))
+
+    def __len__(self):
+        return self.length
+
+    def __getitem__(self, idx):
+        """
+        Retrieve the EEG data at index idx.
+
+        Returns:
+            Dict: A dictionary containing the EEG data.
+        """
+        key = f"data-{str(idx).zfill(5)}".encode("utf-8")
+        with self.env.begin(write=False) as txn:
+            data_bytes = txn.get(key)
+            if data_bytes is None:
+                raise KeyError(f"Key {key} not found in LMDB.")
+            eeg_data = pickle.loads(data_bytes)  # This is 'eeg_ma' as a NumPy array
+
+        eeg_tensor = torch.tensor(eeg_data, dtype=torch.float32)
+        return {
+            'eeg': eeg_tensor
+        }
+
+
+class EEGImageDDIMDataset(Dataset):
+    """
+    Dataset class for training the Conditional DDIM with EEG and Image data.
+    """
+    def __init__(self, ddim_lmdb_path: str, transform: Optional[Callable] = None):
+        """
+        Initialize the EEGImageDDIMDataset.
+
+        Args:
+            ddim_lmdb_path (str): Path to the 'eeg_ddim_ffhq.lmdb' database.
+            transform (Optional[Callable]): Transformations to apply to the images.
+        """
+        super().__init__()
+        self.lmdb_path = ddim_lmdb_path
+        if not os.path.exists(self.lmdb_path):
+            raise FileNotFoundError(f"LMDB path {self.lmdb_path} does not exist.")
+        self.env = lmdb.open(
+            self.lmdb_path,
+            readonly=True,
+            lock=False,
+            readahead=False,
+            meminit=False
+        )
+        with self.env.begin(write=False) as txn:
+            self.length = int(txn.get(b'length').decode('utf-8'))
+
+        self.transform = transform
+
+    def __len__(self):
+        return self.length
+
+    def __getitem__(self, idx):
+        """
+        Retrieve the EEG and Image data at index idx.
+
+        Returns:
+            Dict: A dictionary containing the EEG data, image, label, and subject.
+        """
+        key = f"data-{str(idx).zfill(5)}".encode("utf-8")
+        with self.env.begin(write=False) as txn:
+            data_bytes = txn.get(key)
+            if data_bytes is None:
+                raise KeyError(f"Key {key} not found in LMDB.")
+            data = pickle.loads(data_bytes)
+
+        # Extract EEG data
+        eeg_np = data['data']
+        eeg_tensor = torch.tensor(eeg_np, dtype=torch.float32)
+
+        # Extract and process image
+        image = data['image']
+        if isinstance(image, bytes):
+            image = Image.open(BytesIO(image)).convert('RGB')
+        elif isinstance(image, Image.Image):
+            image = image.convert('RGB')
+        else:
+            # If image is stored as a NumPy array or other format
+            image = Image.fromarray(image).convert('RGB')
+
+        if self.transform:
+            image = self.transform(image)
+
+        # Extract label and subject
+        label = data.get('label', None)
+        subject = data.get('subject', None)
+
+        return {
+            'eeg': eeg_tensor,
+            'image': image,
+            'label': label,
+            'subject': subject
+        }
+
+# ==================== End of New Dataset Classes ====================
